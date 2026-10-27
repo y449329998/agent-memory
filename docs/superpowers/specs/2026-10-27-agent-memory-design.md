@@ -34,6 +34,7 @@
 | 真相源 | SQLite 为真相 + 导出生成物 | 事务、去重、增量简单；导出保住可读性 |
 | 首批范围 | 四家记忆层 + Qoder/OpenCode 会话层 | Trae/WorkBuddy 会话存储格式不稳定，不阻塞主线 |
 | 向量检索 | 本期只预留字段与接口，实现推到 M5 | 本机 `CGO_ENABLED=0` 且无 gcc，`sqlite-vec` 需要加载 C 扩展即需要 CGO；而本项目量级（10³–10⁴ 条）用纯 Go 暴力余弦即可，不需要扩展 |
+| 中文检索 | 自切分二元组 + FTS5 默认 unicode61（只索引 `text_seg`） | 实机验证：默认分词搜不到中文，`trigram` 对两字中文词召回为 0；自切分全部命中（见 5.3） |
 
 ## 3. 已探明的本机存储现状
 
@@ -47,7 +48,10 @@
 | WorkBuddy | `~/.workbuddy/MEMORY.md`、`USER.md`、`SOUL.md`、`app/sessions.json`（仅索引，含 workDir） | 无明文，疑似 IndexedDB/LevelDB 或远端 | 仅记忆；只产出 HANDOFF.md，不动其配置 |
 | Claude Code | `~/.claude/CLAUDE.md` | `~/.claude/projects/`（本机当前为空） | 预留适配器 |
 
-Trae/WorkBuddy 的 `project_memory.md` 与 `MEMORY.md` 均为带固定小节的 Markdown（如 `## Hard Constraints`、`## Engineering Conventions`、`## Lessons Learned`、`## User Preferences`），按小节标题映射记忆类型。
+记忆文件的结构有两种不同形状，适配器不能共用一个解析器：
+
+- **Trae / WorkBuddy**：带固定小节的 bullet 列表（`## Hard Constraints`、`## Engineering Conventions`、`## Lessons Learned`、`## User Preferences`、`# 用户偏好`），一条 bullet = 一条记忆，bullet 的缩进续行归并到该条；小节标题映射记忆类型。
+- **Qoder**：一文件一条记忆，头部是 YAML frontmatter（`name`、`description`、`metadata.type` ∈ user/feedback/project/reference），正文是多段自由文本（含 `**How to apply:**`）。整篇正文作为一条记忆的 `text`，类型由 `metadata.type` 映射（user→preference、feedback→constraint、project→fact、reference→fact）；同目录的 `MEMORY.md` 是索引文件，跳过，否则索引行会被当成记忆内容。
 
 ## 4. 总体架构
 
@@ -114,7 +118,9 @@ agent 学到新记忆 → MCP memory_add → Store → 下次合成生效
 1. git remote origin URL 归一化（去协议、去 `.git`、大小写与 slash 统一）。
 2. 无 remote 时用规范化绝对路径（盘符大写统一、分隔符统一、尾部分隔符去除）。
 
-各 agent 的 slug 无法直接比对，由 `project_path` 表登记映射：适配器在扫描时同时产出该 agent 记录的项目路径（Qoder `state.json` 的 workspace-directories、WorkBuddy `sessions.json` 的 `workDir`、Trae slug 反解出的 `-d-company-xxx` 形式），解析到真实目录后归入同一 `project_key`。
+各 agent 的 slug 无法直接比对，由 `project_path` 表登记映射：适配器在扫描时同时产出该 agent 记录的项目路径——Qoder 取会话 JSONL 中 `{"type":"workspace-directories"}` 行的 `directories`（该行的出现不保证在文件首块，需扫描目录内全部 JSONL 直到命中；Qoder 的 `state.json` 内容是加密的，不可用），WorkBuddy 取 `app/sessions.json` 的 `workDir`，Trae 取 `project_memory.md` 的 slug 反解。解析到真实目录后归入同一 `project_key`。
+
+Qoder 的 slug（如 `E--company-nuonuo-fresh3-api`）不能靠字符替换反解：项目名本身含连字符（`nuonuo-fresh3-api`），`-`/`--` 无法区分。JSONL 里找不到 `workspace-directories` 时，slug 反解结果标记为低置信，且不与已确认项目合并。
 
 解析不到真实目录的项目保留 agent 原生 slug 作为 key，并在 `doctor` 中列为「未合并项目」，不猜测合并。
 
@@ -129,7 +135,11 @@ agent 学到新记忆 → MCP memory_add → Store → 下次合成生效
 
 ### 5.3 检索与向量预留
 
-本期检索走 FTS5 虚表 `memory_fts(text)`（bm25）+ `scope/project/type/recency` 过滤。
+本期检索走 FTS5。中文分词做过实机验证（Go 1.22.6 + `modernc.org/sqlite` v1.34.4，SQLite 3.46.0）：
+
+- 默认 `unicode61` 下，`偏好` 在文本「用户偏好 中文」里命中 0 条——CJK 连续串被当成一个词，中文记忆基本搜不到。
+- `tokenize="trigram"` 对 3 字以上短语可用（`必须使用中文`、`查询构造器` 命中 1），但两字词 `偏好`/`命名`/`中文` 全部命中 0——trigram 要求查询串≥3 字符，而记忆条目里两字抽象名词（偏好、命名、约束）恰好是高频查询粒度。
+- 采用**自切分二元组**：写入与查询共用同一个 `segment()`，把连续 CJK 串切成「单字 + overlapping 二元组」，ASCII/数字词（含 `_`、`-`）原样小写保留。实测上述全部查询命中≥1。FTS5 表只索引 `text_seg` 列，原文仍在 `memory_item.text` 用于展示。代价是索引体积约 2–3 倍，可接受。
 
 向量能力本期只落地三件事，保证 M5 接上时不改表、不改调用方：
 
