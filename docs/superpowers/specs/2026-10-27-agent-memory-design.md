@@ -20,7 +20,7 @@
 2. 不改写任何 agent 的原生记忆文件，不做双向同步。
 3. 不保存完整会话 transcript，不做逐句回放。
 4. 不做语义合并/自动裁决矛盾。
-5. 第一版不做向量检索、不做 embedding。
+5. 本期不实现 embedding 计算与向量检索，只落地数据库字段与 `Embedder`/`SearchProvider` 接口；实现放在 M5。
 
 ## 2. 决策记录
 
@@ -33,6 +33,7 @@
 | 运行形态 | 本地常驻服务 + stdio 转发 | 单实例持有 SQLite，避免多 agent 并发写与重复扫描 |
 | 真相源 | SQLite 为真相 + 导出生成物 | 事务、去重、增量简单；导出保住可读性 |
 | 首批范围 | 四家记忆层 + Qoder/OpenCode 会话层 | Trae/WorkBuddy 会话存储格式不稳定，不阻塞主线 |
+| 向量检索 | 本期只预留字段与接口，实现推到 M5 | 本机 `CGO_ENABLED=0` 且无 gcc，`sqlite-vec` 需要加载 C 扩展即需要 CGO；而本项目量级（10³–10⁴ 条）用纯 Go 暴力余弦即可，不需要扩展 |
 
 ## 3. 已探明的本机存储现状
 
@@ -96,7 +97,7 @@ agent 学到新记忆 → MCP memory_add → Store → 下次合成生效
 | `project` | key, display_name, git_remote, primary_path, created_at, updated_at | 跨 agent 的项目身份 |
 | `project_path` | project_id, agent, path, slug | 各 agent 的 slug/路径 → 同一 project |
 | `source` | agent, kind(memory/session), path, content_hash, mtime, size, last_error, updated_at | 增量扫描游标与失败现场 |
-| `memory_item` | project_id(NULL=用户级), scope, type, text, text_norm_hash, stale, first_seen_at, last_seen_at | 归并后的记忆条目 |
+| `memory_item` | project_id(NULL=用户级), scope, type, text, text_norm_hash, stale, first_seen_at, last_seen_at, embedding(BLOB,可空), embed_model, embed_dim, embedded_at | 归并后的记忆条目 |
 | `memory_source` | memory_id, agent, ref, quote | 一条记忆的多来源证据 |
 | `session` | agent, external_id, project_id, title, started_at, updated_at, event_count, path | 会话索引 |
 | `session_event` | session_id, seq, role, kind, text(截断 500 字), tool, files_json, ts | 抽取信号，不存完整 transcript |
@@ -105,8 +106,6 @@ agent 学到新记忆 → MCP memory_add → Store → 下次合成生效
 | `agent_link` | project_id, agent, block_file, installed_hash, installed_at | 受管区块登记 |
 
 `memory_type` 取值：`preference`、`constraint`、`convention`、`lesson`、`fact`、`goal`。Trae/Qoder 的固定小节标题按此映射。
-
-FTS5 虚表 `memory_fts(text)` 关联 `memory_item`，bm25 排序。
 
 ### 5.1 项目身份
 
@@ -127,6 +126,18 @@ FTS5 虚表 `memory_fts(text)` 关联 `memory_item`，bm25 排序。
 - 源文件中条目消失：置 `stale=1`，不硬删。agent 重写记忆文件时可能只是换措辞，硬删会抹掉结论。仅 `doctor --purge-stale` 或 `memory purge` 真删。
 - 矛盾内容不自动裁决，由来源标注交给用户判断。
 - MCP `memory_add` 写入的条目 `agent="mcp"`，参与同一套去重。
+
+### 5.3 检索与向量预留
+
+本期检索走 FTS5 虚表 `memory_fts(text)`（bm25）+ `scope/project/type/recency` 过滤。
+
+向量能力本期只落地三件事，保证 M5 接上时不改表、不改调用方：
+
+1. **字段**：`embedding` 存 float32 小端字节序列，`embed_model` 与 `embed_dim` 记录来源模型与维度，`embedded_at` 记录计算时间。三者均可空，空即未嵌入。
+2. **失效判定**：`(text_norm_hash, embed_model)` 组成 embedding 的 validity key；文本变化或模型变化即视为过期，M5 的回填命令按此筛选，不做全表重算。
+3. **接口**：`SearchProvider` 定义 `Search(ctx, Query) ([]Hit, error)`，`Hit` 含 `score` 与 `source(fts|vector|hybrid)`；`Embedder` 定义 `Embed(ctx, texts []string) ([][]float32, error)` 并返回模型标识。本期只有 `ftsProvider` 一个实现。
+
+M5 的实现路径已经确定，不再另做决策：纯 Go 常驻内存暴力余弦 KNN（10³–10⁴ 条规模下毫秒级），与 bm25 结果用 RRF 融合；`Embedder` 走 OpenAI 兼容 `/v1/embeddings`，同一客户端兼容本地 Ollama；未配置端点时自动退化为纯 FTS，不报错。上 `sqlite-vec` 的唯一触发条件是条数超过约 10 万，届时要连带承担 CGO 与 Windows 工具链成本。
 
 ## 6. 会话抽取与任务卡
 
@@ -212,7 +223,7 @@ CLI 的 `memory` 子命令为 `search` / `add` / `list` / `purge`（`purge` 删�
 
 ## 10. 测试策略
 
-- **单元测试**：文本归一化与哈希、去重命中、status 判定规则、裁剪优先级、`project_key` 归一化。表驱动。
+- **单元测试**：文本归一化与哈希、去重命中、status 判定规则、裁剪优先级、`project_key` 归一化、embedding validity key 判定（文本变更 / 模型变更 / 两者都不变）。表驱动。
 - **适配器契约测试**：四个适配器共用一套测试骨架，fixtures 由本机真实文件脱敏拷贝而来，断言产出的 `MemoryItem` / `SessionEvent` 集合。
 - **Composer golden test**：给定 store 快照断言 markdown 完全一致；额外断言不超预算、偏好与硬约束段永不被裁。
 - **集成测试**：临时 HOME + 真实 SQLite，跑 import → search → add → handoff 全链路；连续两次 import 必须零 diff（幂等）。
@@ -233,7 +244,7 @@ CLI 的 `memory` 子命令为 `search` / `add` / `list` / `purge`（`purge` 删�
 - **M2 交接**：Qoder 会话导入 + Extractor + Composer → `HANDOFF.md`。
 - **M3 接入**：MCP server + stdio bridge + `link`（Qoder、OpenCode）。
 - **M4 扩展**：Trae/WorkBuddy 记忆、OpenCode 会话、`doctor --dump` 探测 Trae 会话存储。
-- **M5 增强（可选）**：LLM 润色、向量检索、导出与备份完善。
+- **M5 增强（可选）**：LLM 润色、向量检索实现（`Embedder` + 纯 Go 暴力 KNN + RRF 融合，直接复用本期已落地的字段与接口）、导出与备份完善。
 
 M1–M3 即达成第 11 节全部四条验收标准（跨 Qoder 与 OpenCode 两个 agent）；M4/M5 各自独立成计划。
 
@@ -245,3 +256,4 @@ M1–M3 即达成第 11 节全部四条验收标准（跨 Qoder 与 OpenCode 两
 | WorkBuddy 对话内容存储位置 | 第一版不接入会话；仅用 `MEMORY.md`/`USER.md` 与 `sessions.json` 的项目路径映射 |
 | OpenCode SQLite 表名与字段版本差异 | 实现前先 dump schema，适配器按检测到的版本分支 |
 | Trae slug 反解真实路径的可靠性 | 反解失败时回退为独立 project_key，并由 `doctor` 列为未合并项 |
+| embedding 服务端点与模型 | 本期不需要决定；M5 实施时按第 5.3 节的 OpenAI 兼容客户端填配置 |
