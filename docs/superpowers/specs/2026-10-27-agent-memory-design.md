@@ -101,7 +101,7 @@ agent 学到新记忆 → MCP memory_add → Store → 下次合成生效
 | `project` | key, display_name, git_remote, primary_path, created_at, updated_at | 跨 agent 的项目身份 |
 | `project_path` | project_id, agent, path, slug | 各 agent 的 slug/路径 → 同一 project |
 | `source` | agent, kind(memory/session), path, content_hash, mtime, size, last_error, updated_at | 增量扫描游标与失败现场 |
-| `memory_item` | project_id(NULL=用户级), scope, type, text, text_norm_hash, stale, first_seen_at, last_seen_at, embedding(BLOB,可空), embed_model, embed_dim, embedded_at | 归并后的记忆条目 |
+| `memory_item` | project_id(0=用户级), scope, type, text, text_norm_hash, stale, first_seen_at, last_seen_at, embedding(BLOB,可空), embed_model, embed_dim, embedded_at | 归并后的记忆条目 |
 | `memory_source` | memory_id, agent, ref, quote | 一条记忆的多来源证据 |
 | `session` | agent, external_id, project_id, title, started_at, updated_at, event_count, path | 会话索引 |
 | `session_event` | session_id, seq, role, kind, text(截断 500 字), tool, files_json, ts | 抽取信号，不存完整 transcript |
@@ -127,7 +127,7 @@ Qoder 的 slug（如 `E--company-nuonuo-fresh3-api`）不能靠字符替换反�
 ### 5.2 去重与冲突
 
 - 文本归一化：NFKC → 去 Markdown 列表符号与前缀 → 折叠空白 → 小写 → 计算 `text_norm_hash`。
-- 唯一约束：`(scope, project_id, type, text_norm_hash)`。命中已存在条目时只追加 `memory_source`，并更新 `last_seen_at`，不复制条目。
+- 唯一约束：`(scope, project_id, type, text_norm_hash)`。命中已存在条目时只追加 `memory_source`，并更新 `last_seen_at`，不复制条目。`project_id` 用 `0` 而不是 NULL 表示用户级——SQLite 唯一索引把 NULL 视为互不相等，NULL 方案下用户级记忆永远去重不了。
 - 近似重复不落库、不建关系表：只在 `doctor` 和 `memory_search` 结果里按词面重叠率即时计算并列展示，标出来源，由人判断是否合并。
 - 源文件中条目消失：置 `stale=1`，不硬删。agent 重写记忆文件时可能只是换措辞，硬删会抹掉结论。仅 `doctor --purge-stale` 或 `memory purge` 真删。
 - 矛盾内容不自动裁决，由来源标注交给用户判断。
@@ -207,11 +207,13 @@ Resources 暴露 `agent-memory://project/<key>/handoff`。
 
 | Agent | MCP 配置 | 受管区块 |
 |---|---|---|
-| Qoder | `~/.qoder-cn/mcp.json` | 项目 `AGENTS.md` |
-| OpenCode | `~/.config/opencode/opencode.json` 的 mcp 段 | `AGENTS.md` |
-| Trae | `~/.trae-cn/mcps` | 项目规则文件 |
-| Claude Code | `~/.claude.json` | `CLAUDE.md` |
+| Qoder | `~/.qoder-cn/mcp.json`（实测顶层是 `mcpServers`） | 项目 `AGENTS.md` |
+| OpenCode | `~/.config/opencode/opencode.json` 的 `mcp` 段（`type: local` + `command` 数组，官方 schema 确证） | `AGENTS.md` |
+| Claude Code | `~/.claude.json` 顶层 `mcpServers` | `CLAUDE.md` |
+| Trae | **不写**：`~/.trae-cn/mcps/` 是 `s_<项目>-<hash>/…` 生成目录，没有可编辑的 JSON 入口，格式未确证 | 仅 `HANDOFF.md` |
 | WorkBuddy | 不写配置 | 仅产出 `HANDOFF.md` |
+
+Trae 与 WorkBuddy 仍然读得到共享记忆：区块之外的路径是项目里的 `.agent-memory/HANDOFF.md`，而 `link` 对未确证格式一律拒绝写入而不是猜。
 
 `link` 是唯一改动既有文件的命令，约束：JSON 合并而非覆盖；改前落 `.bak-<时间戳>`；重复执行结果相同（幂等）；区块用 `<!-- agent-memory:begin -->` / `end` 包裹，内容只有 project_key、指针和刷新时间，正文留在 `HANDOFF.md`；`unlink` 精确还原自身写入内容。
 
@@ -245,7 +247,7 @@ CLI 的 `memory` 子命令为 `search` / `add` / `list` / `purge`（`purge` 删�
 
 1. 在 Qoder 完成一个任务后，OpenCode 或 Trae 新会话无需追问即可回答：在做什么、做到哪一步、有哪些硬约束。
 2. 每条共享记忆可追溯到来源 agent 与来源位置。
-3. 重复扫描幂等，且 `doctor` 能证明所有 agent 原生记忆文件的哈希未被本程序改动。
+3. 重复扫描幂等：连续两次 `scan` 后库内容零 diff。原生文件未被改写的证明方式是**写入目标清单封闭**——`doctor` 列出本程序全部写入位置（库目录、`.agent-memory/`、`link` 装过的配置与区块）并校验其哈希，同时列出只读源文件的哈希变化清单供人比对归属；单靠源文件哈希变化无法证明是谁改的，所以不作证据。
 4. 交接简报稳定落在 token 预算内。
 
 ## 12. 里程碑
