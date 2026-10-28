@@ -2,7 +2,7 @@
 
 让 Qoder、Trae、WorkBuddy、OpenCode 共用一份记忆。切到另一个 agent 时不必从头描述任务。
 
-M1 接入 Qoder 的记忆文件；M2 起再导入它的会话历史，提炼任务卡并生成项目交接简报。M3 增加常驻服务 `serve`、stdio 桥 `mcp` 与 `link`，让 Qoder / OpenCode / Claude 通过 MCP 直接读写共享记忆。Trae / WorkBuddy 的 MCP 配置格式尚未确证，仍只通过项目里的 `HANDOFF.md` 读取。
+M1 接入 Qoder 的记忆文件；M2 起再导入它的会话历史，提炼任务卡并生成项目交接简报。M3 增加常驻服务 `serve`、stdio 桥 `mcp` 与 `link`，让 Qoder / OpenCode / Claude 通过 MCP 直接读写共享记忆。Trae / WorkBuddy 的记忆文件也已导入；它们的 MCP 配置格式尚未确证，仍只通过项目里的 `HANDOFF.md` 读取。
 
 ## 桌面应用
 
@@ -13,6 +13,7 @@ M1 接入 Qoder 的记忆文件；M2 起再导入它的会话历史，提炼任�
 ## 现在能做什么
 
 - 读取 Qoder 的长期记忆与会话，归并去重进一个共享 SQLite 库，并为项目生成 `.agent-memory/HANDOFF.md`（目标 / 状态 / 改动文件 / 下一步 / 未决问题）
+- 同时导入 Trae 与 WorkBuddy 的记忆：Trae 读用户记忆、`projects/*/project_memory.md` 与 `user_rules/`（项目记忆按 `workspaceStorage` 映射回真实项目），WorkBuddy 读 `MEMORY.md`；三家去重进同一份库，`doctor` 分别给出发现结果
 - `agent-memory serve` 常驻：HTTP 接口 + MCP 端点，同时监听 agent 目录，变化时自动增量扫描并刷新简报
 - `agent-memory mcp` 作为 stdio 桥转发给 serve，agent 侧只看到一种标准的本地 MCP 进程
 - MCP 暴露 8 个工具：`memory_search` / `memory_add` / `memory_list` / `handoff_get` / `task_list` / `task_get` / `project_resolve` / `stats`

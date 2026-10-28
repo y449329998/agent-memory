@@ -6,11 +6,61 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/muyi99/agent-memory/internal/agent"
+	"github.com/muyi99/agent-memory/internal/agent/qoder"
+	"github.com/muyi99/agent-memory/internal/agent/trae"
+	"github.com/muyi99/agent-memory/internal/agent/workbuddy"
 )
+
+// TestWatchDirs_CollectsWatchableAdaptersInOrder 回归：serve 不再按具体类型断言，
+// 而是收集所有实现 agent.Watchable 的适配器目录，顺序跟随装配顺序；
+// WorkBuddy 返回 nil（根目录缓存太多），不产生监听目录。
+func TestWatchDirs_CollectsWatchableAdaptersInOrder(t *testing.T) {
+	root := t.TempDir()
+	qoderHome := filepath.Join(root, ".qoder-cn")
+	traeHome := filepath.Join(root, ".trae-cn")
+	workBuddyHome := filepath.Join(root, ".workbuddy")
+
+	got := watchDirs([]agent.Adapter{
+		qoder.New(qoderHome),
+		trae.New(traeHome),
+		workbuddy.New(workBuddyHome),
+	})
+	want := []string{
+		filepath.Join(qoderHome, "memory"),
+		filepath.Join(qoderHome, "projects"),
+		filepath.Join(traeHome, "memory"),
+		filepath.Join(traeHome, "user_rules"),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("watchDirs = %v, want %v", got, want)
+	}
+}
+
+// TestWatchDirs_DeduplicatesSharedHome：两个适配器指向同一个 home 时，
+// 同一个记忆目录只监听一次，且保留首次出现的顺序。
+func TestWatchDirs_DeduplicatesSharedHome(t *testing.T) {
+	home := filepath.Join(t.TempDir(), ".shared")
+	got := watchDirs([]agent.Adapter{
+		qoder.New(home),
+		trae.New(home),
+		workbuddy.New(home),
+	})
+	want := []string{
+		filepath.Join(home, "memory"),
+		filepath.Join(home, "projects"),
+		filepath.Join(home, "user_rules"),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("watchDirs = %v, want %v", got, want)
+	}
+}
 
 func TestServe_RefusesSecondInstance(t *testing.T) {
 	home, _ := isolateHomeWithRepo(t)

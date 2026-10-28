@@ -11,10 +11,10 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/muyi99/agent-memory/internal/agent"
-	"github.com/muyi99/agent-memory/internal/agent/qoder"
 	"github.com/muyi99/agent-memory/internal/config"
 	"github.com/muyi99/agent-memory/internal/daemon"
 	"github.com/muyi99/agent-memory/internal/ingest"
@@ -222,15 +222,28 @@ func adapterNames(adapters []agent.Adapter) []string {
 	return out
 }
 
-// watchDirs 只监听各 agent 存放记忆与会话的目录，不递归到无关子树。
+// watchDirs 收集所有实现 agent.Watchable 的适配器目录，保持适配器顺序并去重。
+// 不实现该接口的适配器（或返回 nil 的）不产生监听目录，只靠轮询兜底。
 func watchDirs(adapters []agent.Adapter) []string {
 	var out []string
+	seen := make(map[string]bool)
 	for _, a := range adapters {
-		q, ok := a.(*qoder.Adapter)
+		w, ok := a.(agent.Watchable)
 		if !ok {
 			continue
 		}
-		out = append(out, filepath.Join(q.Home, "memory"), filepath.Join(q.Home, "projects"))
+		for _, dir := range w.WatchDirs() {
+			if dir == "" {
+				continue
+			}
+			// Windows 路径大小写不敏感：键统一小写，但保留首个写法。
+			key := strings.ToLower(filepath.Clean(dir))
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, dir)
+		}
 	}
 	return out
 }

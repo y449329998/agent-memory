@@ -18,11 +18,18 @@ type Adapter struct {
 	Home string
 }
 
-var _ agent.Adapter = (*Adapter)(nil)
+var (
+	_ agent.Adapter   = (*Adapter)(nil)
+	_ agent.Watchable = (*Adapter)(nil)
+)
 
 func New(home string) *Adapter { return &Adapter{Home: home} }
 
 func (a *Adapter) Name() string { return "workbuddy" }
+
+// WatchDirs 返回 nil：~/.workbuddy 根目录有大量应用缓存，递归监听会放大事件量，
+// 这个 agent 只靠 30 秒轮询兜底。
+func (a *Adapter) WatchDirs() []string { return nil }
 
 // ScanSessionUnits: WorkBuddy 的对话在远端/IndexedDB，本地只有会话索引，
 // 本期不导入会话。

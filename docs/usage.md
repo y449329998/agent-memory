@@ -6,7 +6,7 @@
 
 ## 1. 它解决什么
 
-你在 Qoder / Trae / WorkBuddy / OpenCode 之间切换时，每个 agent 各存一份记忆与历史，互不可见。agent-memory 把 Qoder 的长期记忆与会话历史读进一个本地共享库：
+你在 Qoder / Trae / WorkBuddy / OpenCode 之间切换时，每个 agent 各存一份记忆与历史，互不可见。agent-memory 把 Qoder 的长期记忆与会话历史、Trae 与 WorkBuddy 的记忆文件读进一个本地共享库：
 
 - 记忆去重后统一检索（中文两字词可命中）
 - 会话提炼成任务卡（目标 / 状态 / 改动文件 / 下一步 / 未决问题）
@@ -52,6 +52,8 @@ go build -o agent-memory-app.exe ./cmd/agent-memory-app  # 桌面应用（双击
 ./agent-memory.exe link qoder --project . --dry-run   # 先看会改什么
 ./agent-memory.exe link qoder --project .             # 真正接入
 ```
+
+`scan` 按 qoder → trae → workbuddy 的固定顺序读三家：Qoder 读 `~/.qoder-cn/memory`、`projects/*/memory` 与会话 jsonl；Trae 读 `~/.trae-cn/memory`（含 `projects/<项目>/project_memory.md`）与 `user_rules/`，并用 `%APPDATA%\Trae CN\User\workspaceStorage` 把项目目录名映射回真实路径；WorkBuddy 只读 `~/.workbuddy/MEMORY.md`。Trae 与 WorkBuddy 都没有会话可导入。
 
 浏览器打开 `http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>` 即 Web UI。
 
@@ -121,7 +123,7 @@ agent-memory handoff [--project PATH] [--print] [--budget N]
 agent-memory doctor [--since 720h]
 ```
 
-自检报告：库路径、项目/记忆/过时/源/失败源统计、按 agent 与按类型分布、会话/任务卡/简报计数、**写入目标清单**（数据目录、DB、每个 link 登记过的区块文件）、agent 发现结果、最近变更的源文件、解析失败的源、未合并项目（低置信 slug）、同一路径映射到多个项目的脏数据告警。
+自检报告：库路径、项目/记忆/过时/源/失败源统计、按 agent 与按类型分布、会话/任务卡/简报计数、**写入目标清单**（数据目录、DB、每个 link 登记过的区块文件）、agent 发现结果（qoder / trae / workbuddy，Trae 附 workspace 根数量）、最近变更的源文件、解析失败的源、未合并项目（低置信 slug）、同一路径映射到多个项目的脏数据告警。
 
 排查时先跑它。
 
@@ -136,6 +138,7 @@ agent-memory serve [--port 47123] [--poll 30] [--debounce 2s] [--no-watch]
 - 只监听 `127.0.0.1`，用 `~/.agent-memory/token` 做 Bearer 鉴权；端口写入 `~/.agent-memory/port`，退出时删除。
 - `--port 0` 系统分配随机端口；**换端口后要重新 `link`**（MCP 配置里写死了端口）。
 - `--poll` 轮询兜底间隔（0 表示用配置 `[scan] interval`）；`--debounce` 事件去抖窗口。
+- 监听目录只覆盖记忆源：qoder 的 `memory/`、`projects/`，trae 的 `memory/`、`user_rules/`（去重后交给 watcher）；WorkBuddy 不监听，只靠 `--poll` 兜底。
 - `--no-watch` 只开服务不扫描（调试用），此时 `POST /v1/scan` 仍可用。
 - 已在运行（同端口健康检查通过）时拒绝启动；但用不同 `--port` 可以起第二个实例——**不要这样用**，两个进程会重复扫描同一库。
 
@@ -189,6 +192,18 @@ data_dir = 'C:\Users\You\.agent-memory'
 disabled = false
 home = 'C:\Users\You\.qoder-cn'
 
+[trae]
+disabled = false
+home = 'C:\Users\You\.trae-cn'
+workspace_roots = [
+  'C:\Users\You\AppData\Roaming\Trae CN\User\workspaceStorage',
+  'C:\Users\You\AppData\Roaming\Trae\User\workspaceStorage',
+]
+
+[workbuddy]
+disabled = false
+home = 'C:\Users\You\.workbuddy'
+
 [scan]
 interval = "30s"          # 轮询兜底间隔
 
@@ -202,6 +217,10 @@ settle_idle = "5m"        # 会话文件静默多久算写完、可以出任务�
 - 未知键会**报错**（拼错的键不会静默忽略），错误里列出全部未知键。
 - 时长为 TOML 字符串（`"30s"`、`"5m"`）；写成整数表示纳秒。
 - `qoder.home` 不填则自动发现 `~/.qoder-cn` → `~/.qoder`（判据是存在 `memory` 或 `projects` 子目录）。
+- `trae.home` 不填则自动发现 `~/.trae-cn` → `~/.trae`（判据是存在 `memory` 或 `user_rules` 子目录）。
+- `trae.workspace_roots` 不填则取 `%APPDATA%\Trae CN\User\workspaceStorage` → `%APPDATA%\Trae\User\workspaceStorage`；`APPDATA` 为空时退回 `<用户目录>\AppData\Roaming` 下的同名路径。
+- `workbuddy.home` 不填则自动发现 `~/.workbuddy`（判据是存在 `MEMORY.md` 或 `app` 子目录）。
+- 三家的 `disabled = true` 都会让对应适配器既不扫描、也不出现在 `doctor` 的发现结果里。
 
 ---
 
@@ -218,6 +237,8 @@ settle_idle = "5m"        # 会话文件静默多久算写完、可以出任务�
 | `<项目>/.git/info/exclude` | 加一行 `/.agent-memory/` | 首次写简报时 |
 | `~/.qoder-cn/mcp.json` 等 | MCP 配置 | **仅** `link`/`unlink` |
 | `<项目>/AGENTS.md` 或 `CLAUDE.md` | 受管区块 | **仅** `link`/`unlink` |
+
+Trae 与 WorkBuddy 的原生目录（`~/.trae-cn`、`%APPDATA%\Trae CN\User\workspaceStorage`、`~/.workbuddy`）**只读**：`scan` 只做 `os.ReadDir` / `os.ReadFile` / `os.Stat`，不会在其中创建、修改或删除任何文件。
 
 `.agent-memory/` 用 `.git/info/exclude` 而不是 `.gitignore`：只影响本机，不会出现在提交里。
 
@@ -380,7 +401,7 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 
 ## 13. 只读边界与安全
 
-**只读**：Qoder 的记忆 md 与会话 jsonl 一律只读；没有任何写路径指向 `~/.qoder-cn`、`~/.trae-cn`、`~/.workbuddy`、`~/.config/opencode`、`~/.claude`（`handoff` 还会显式拒绝这些目录）。
+**只读**：Qoder 的记忆 md 与会话 jsonl、Trae 的记忆/规则 md 与 workspaceStorage、WorkBuddy 的 `MEMORY.md` 一律只读；没有任何写路径指向 `~/.qoder-cn`、`~/.trae-cn`、`~/.workbuddy`、`~/.config/opencode`、`~/.claude`（`handoff` 还会显式拒绝这些目录）。
 
 **写点只有**：
 1. 数据目录：`config.toml`、`memory.db`、`token`、`port`
@@ -421,8 +442,9 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 - 检索是字面二元组，跨标点短语会漏（见第 8 节）
 - 纯「删除文件 → 用完全相同内容恢复」若从未观察到读错误，条目会一直 stale（`scan --full` 或 `memory purge` 可处理）
 - `last_seen_at` 语义是「最后变更」而非「最后见到」
-- Trae / WorkBuddy 只支持记忆层与 `HANDOFF.md`，不接 MCP、不读会话
-- OpenCode 会话与 Trae 会话尚未接入（M4 计划）
+- Trae / WorkBuddy 只有记忆、没有会话：Trae 读 `memory/`、`memory/projects/*/project_memory.md` 与 `user_rules/`，WorkBuddy 只读 `~/.workbuddy/MEMORY.md`；两者不产生任务卡、不接 MCP，靠项目里的 `HANDOFF.md` 读取共享记忆
+- WorkBuddy 不参与文件监听（`~/.workbuddy` 根目录有大量应用缓存，监听会放大事件量），改动由 30 秒轮询兜底；Trae 只监听 `memory/` 与 `user_rules/`，`workspaceStorage` 的变化不触发扫描
+- OpenCode 的会话/记忆与 Trae 的会话（`state.vscdb`，结构未公开）尚未接入
 - `git worktree` / submodule 的 `.git` 是文件，目前读不到 remote，会退化为路径 key
 - 单机单库；多机同步与全文 transcript 检索属于非目标
 
@@ -431,7 +453,7 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 ## 16. 开发与测试
 
 ```bash
-go test ./... -count=1     # 295 个测试函数
+go test ./... -count=1     # 356 个测试函数
 go vet ./...
 go build ./cmd/agent-memory
 ```

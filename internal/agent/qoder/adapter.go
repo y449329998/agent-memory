@@ -17,6 +17,16 @@ type Adapter struct {
 
 func New(home string) *Adapter { return &Adapter{Home: home} }
 
+var (
+	_ agent.Adapter   = (*Adapter)(nil)
+	_ agent.Watchable = (*Adapter)(nil)
+)
+
+// WatchDirs 返回 Qoder 存放记忆与会话的目录。
+func (a *Adapter) WatchDirs() []string {
+	return []string{filepath.Join(a.Home, "memory"), filepath.Join(a.Home, "projects")}
+}
+
 func (a *Adapter) Name() string { return "qoder" }
 
 func (a *Adapter) ScanMemoryUnits(ctx context.Context) ([]agent.MemoryUnit, error) {

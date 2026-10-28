@@ -84,6 +84,16 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) int {
 	} else {
 		fmt.Fprintln(stdout, "  qoder: 未发现（可在 config.toml 指定 [qoder] home）")
 	}
+	if home := e.cfg.TraeHome(); home != "" {
+		fmt.Fprintf(stdout, "  trae: %s（workspace 根 %d 个）\n", home, len(e.cfg.TraeWorkspaceRoots()))
+	} else {
+		fmt.Fprintln(stdout, "  trae: 未发现（可在 config.toml 指定 [trae] home）")
+	}
+	if home := e.cfg.WorkBuddyHome(); home != "" {
+		fmt.Fprintf(stdout, "  workbuddy: %s\n", home)
+	} else {
+		fmt.Fprintln(stdout, "  workbuddy: 未发现（可在 config.toml 指定 [workbuddy] home）")
+	}
 
 	changed, err := e.st.ChangedSources(ctx, time.Now().Add(-d).Unix())
 	if err != nil {

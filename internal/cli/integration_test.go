@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/muyi99/agent-memory/internal/agent/trae"
+	"github.com/muyi99/agent-memory/internal/config"
 	"github.com/muyi99/agent-memory/internal/store"
 )
 
@@ -179,6 +182,56 @@ func TestEndToEnd_InitScanSearchAddDoctor(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "未合并项目") {
 		t.Fatalf("高置信项目不应被列为未合并:\n%s", out.String())
+	}
+}
+
+// TestEndToEnd_ThreeAgentsScanAndDoctor：三家都装假数据时，scan 应按
+// qoder → trae → workbuddy 顺序导入，doctor 同时给出三家发现结果。
+func TestEndToEnd_ThreeAgentsScanAndDoctor(t *testing.T) {
+	home, _, _ := isolateHome(t)
+
+	traeHome := filepath.Join(home, ".trae-cn")
+	mustWrite(t, filepath.Join(traeHome, "memory", "user_profile.md"),
+		"# 用户偏好\n\n- 注释只留必要部分。\n")
+	mustWrite(t, filepath.Join(traeHome, "memory", "projects", "-x-demo", "project_memory.md"),
+		"# 硬约束\n\n- 金额字段一律用整数分。\n")
+
+	workBuddyHome := filepath.Join(home, ".workbuddy")
+	mustWrite(t, filepath.Join(workBuddyHome, "MEMORY.md"), "# 偏好\n\n- 提交信息用中文。\n")
+
+	var out bytes.Buffer
+	if code := run(t, &out, "init"); code != 0 {
+		t.Fatalf("init exit %d", code)
+	}
+	out.Reset()
+	if code := run(t, &out, "scan"); code != 0 {
+		t.Fatalf("scan exit %d: %s", code, out.String())
+	}
+	// qoder 2（user.md + state.md）+ trae 2（user_profile + 项目记忆）+ workbuddy 1
+	for _, want := range []string{"units=5", "created=5"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("scan missing %q: %q", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "! ") {
+		t.Fatalf("scan should have no per-source errors: %q", out.String())
+	}
+
+	out.Reset()
+	if code := run(t, &out, "doctor"); code != 0 {
+		t.Fatalf("doctor exit %d", code)
+	}
+	for _, want := range []string{
+		"按 agent 的记忆条数: map[qoder:2 trae:2 workbuddy:1]",
+		"  qoder: " + filepath.Join(home, ".qoder-cn"),
+		"  trae: " + traeHome,
+		"（workspace 根 2 个）",
+		"  workbuddy: " + workBuddyHome,
+		"trae:-x-demo", // 无 workspace 索引时项目记忆标为低置信独立项目
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("doctor missing %q:\n%s", want, out.String())
+		}
 	}
 }
 
@@ -537,5 +590,37 @@ func TestDoctor_ReportsSamePathMappedToMultipleProjects(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("doctor missing %q:\n%s", want, out.String())
 		}
+	}
+}
+
+// TestBuildAdapters_OrderAndTraeWorkspaceRoots 保证装配顺序稳定（决定扫描与报告顺序），
+// 且 [trae] workspace_roots 真的传到适配器；禁用时整家消失但不打乱其余顺序。
+func TestBuildAdapters_OrderAndTraeWorkspaceRoots(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("USERPROFILE", root)
+	t.Setenv("HOME", root)
+	mustMkdir(t, filepath.Join(root, ".qoder-cn", "memory"))
+	mustMkdir(t, filepath.Join(root, ".trae-cn", "memory"))
+	mustWrite(t, filepath.Join(root, ".workbuddy", "MEMORY.md"), "- x\n")
+
+	cfg := config.Default(root)
+	roots := []string{filepath.Join(root, "ws-cn"), filepath.Join(root, "ws")}
+	cfg.Trae.WorkspaceRoots = roots
+
+	adapters := buildAdapters(cfg)
+	if got := adapterNames(adapters); !reflect.DeepEqual(got, []string{"qoder", "trae", "workbuddy"}) {
+		t.Fatalf("adapter order = %v", got)
+	}
+	tr, ok := adapters[1].(*trae.Adapter)
+	if !ok {
+		t.Fatalf("second adapter is %T, want *trae.Adapter", adapters[1])
+	}
+	if !reflect.DeepEqual(tr.WorkspaceRoots, roots) {
+		t.Fatalf("trae workspace roots = %v, want %v", tr.WorkspaceRoots, roots)
+	}
+
+	cfg.Trae.Disabled = true
+	if got := adapterNames(buildAdapters(cfg)); !reflect.DeepEqual(got, []string{"qoder", "workbuddy"}) {
+		t.Fatalf("disabled trae should be dropped, got %v", got)
 	}
 }

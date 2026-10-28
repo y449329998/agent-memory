@@ -10,6 +10,8 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/muyi99/agent-memory/internal/agent/qoder"
+	"github.com/muyi99/agent-memory/internal/agent/trae"
+	"github.com/muyi99/agent-memory/internal/agent/workbuddy"
 )
 
 const (
@@ -18,13 +20,29 @@ const (
 )
 
 type Config struct {
-	DataDir string        `toml:"data_dir"`
-	Qoder   QoderConfig   `toml:"qoder"`
-	Scan    ScanConfig    `toml:"scan"`
-	Handoff HandoffConfig `toml:"handoff"`
+	DataDir   string          `toml:"data_dir"`
+	Qoder     QoderConfig     `toml:"qoder"`
+	Trae      TraeConfig      `toml:"trae"`
+	WorkBuddy WorkBuddyConfig `toml:"workbuddy"`
+	Scan      ScanConfig      `toml:"scan"`
+	Handoff   HandoffConfig   `toml:"handoff"`
 }
 
 type QoderConfig struct {
+	Disabled bool   `toml:"disabled"`
+	Home     string `toml:"home"`
+}
+
+// TraeConfig 控制 Trae 记忆源。Home 是配置根（含 memory/、user_rules/）；
+// WorkspaceRoots 是 workspaceStorage 根，用来把项目记忆目录名映射回真实路径。
+type TraeConfig struct {
+	Disabled       bool     `toml:"disabled"`
+	Home           string   `toml:"home"`
+	WorkspaceRoots []string `toml:"workspace_roots"`
+}
+
+// WorkBuddyConfig 控制 WorkBuddy 记忆源。Home 是配置根（含 MEMORY.md）。
+type WorkBuddyConfig struct {
 	Disabled bool   `toml:"disabled"`
 	Home     string `toml:"home"`
 }
@@ -90,6 +108,83 @@ func QoderHomeDir(home string) string {
 		if st, err := os.Stat(dir); err == nil && st.IsDir() {
 			return dir
 		}
+	}
+	return ""
+}
+
+// TraeHome 返回 Trae 配置根；显式配置优先，其次自动发现，禁用时返回空串。
+func (c Config) TraeHome() string {
+	if c.Trae.Disabled {
+		return ""
+	}
+	if c.Trae.Home != "" {
+		return c.Trae.Home
+	}
+	return TraeHomeDir(c.userBaseForDiscovery())
+}
+
+// TraeHomeDir 在 home 下解析 Trae 配置根：.trae-cn 优先，其次 .trae。
+// 判据与 QoderHomeDir 一致：先按 trae.DiscoverHome（装着 memory/user_rules 才算数），
+// 再退到同名目录本身。
+func TraeHomeDir(home string) string {
+	if home == "" {
+		return ""
+	}
+	if dir, ok := trae.DiscoverHome(home); ok {
+		return dir
+	}
+	for _, name := range []string{".trae-cn", ".trae"} {
+		dir := filepath.Join(home, name)
+		if st, err := os.Stat(dir); err == nil && st.IsDir() {
+			return dir
+		}
+	}
+	return ""
+}
+
+// TraeWorkspaceRoots 返回 workspaceStorage 根：显式配置优先，否则按 APPDATA 推导。
+// 禁用 Trae 时返回 nil——不会再有适配器用到这份索引。
+func (c Config) TraeWorkspaceRoots() []string {
+	if c.Trae.Disabled {
+		return nil
+	}
+	if len(c.Trae.WorkspaceRoots) > 0 {
+		return c.Trae.WorkspaceRoots
+	}
+	return traeWorkspaceRootsFor(c.userBaseForDiscovery())
+}
+
+// traeWorkspaceRootsFor 给出 Trae 默认的 workspaceStorage 根：Trae CN 优先，其次 Trae。
+// APPDATA 为空（非 Windows 或精简环境）时退回 <userBase>/AppData/Roaming，
+// 仍然为空则返回 nil，由适配器自己再兜底。
+func traeWorkspaceRootsFor(userBase string) []string {
+	appData := os.Getenv("APPDATA")
+	if appData == "" {
+		if userBase == "" {
+			return nil
+		}
+		appData = filepath.Join(userBase, "AppData", "Roaming")
+	}
+	return []string{
+		filepath.Join(appData, "Trae CN", "User", "workspaceStorage"),
+		filepath.Join(appData, "Trae", "User", "workspaceStorage"),
+	}
+}
+
+// WorkBuddyHome 返回 WorkBuddy 配置根；显式配置优先，其次自动发现，禁用时返回空串。
+func (c Config) WorkBuddyHome() string {
+	if c.WorkBuddy.Disabled {
+		return ""
+	}
+	if c.WorkBuddy.Home != "" {
+		return c.WorkBuddy.Home
+	}
+	home := c.userBaseForDiscovery()
+	if home == "" {
+		return ""
+	}
+	if dir, ok := workbuddy.DiscoverHome(home); ok {
+		return dir
 	}
 	return ""
 }

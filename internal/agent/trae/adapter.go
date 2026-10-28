@@ -17,11 +17,20 @@ type Adapter struct {
 	WorkspaceRoots []string
 }
 
-var _ agent.Adapter = (*Adapter)(nil)
+var (
+	_ agent.Adapter   = (*Adapter)(nil)
+	_ agent.Watchable = (*Adapter)(nil)
+)
 
 func New(home string) *Adapter { return &Adapter{Home: home} }
 
 func (a *Adapter) Name() string { return "trae" }
+
+// WatchDirs 返回 Trae 存放记忆与用户规则的目录。
+// workspaceStorage 不监听：那里是编辑器状态，不是记忆源。
+func (a *Adapter) WatchDirs() []string {
+	return []string{filepath.Join(a.Home, "memory"), filepath.Join(a.Home, "user_rules")}
+}
 
 // ScanSessionUnits: Trae 的会话存在 state.vscdb 里（结构未公开），
 // 本期适配器只导入记忆文件。

@@ -10,6 +10,8 @@ import (
 
 	"github.com/muyi99/agent-memory/internal/agent"
 	"github.com/muyi99/agent-memory/internal/agent/qoder"
+	"github.com/muyi99/agent-memory/internal/agent/trae"
+	"github.com/muyi99/agent-memory/internal/agent/workbuddy"
 	"github.com/muyi99/agent-memory/internal/config"
 	"github.com/muyi99/agent-memory/internal/domain"
 	"github.com/muyi99/agent-memory/internal/store"
@@ -55,10 +57,19 @@ func loadConfigEnv() (*env, error) {
 
 // buildAdapters 把配置翻译成启用的适配器列表。
 // 新增 agent 时只改这里：其余层都通过 agent.Adapter 接口工作。
+// 顺序固定为 qoder、trae、workbuddy：扫描与报告都按它走，保证输出稳定。
 func buildAdapters(cfg config.Config) []agent.Adapter {
 	var out []agent.Adapter
 	if home := cfg.QoderHome(); home != "" {
 		out = append(out, qoder.New(home))
+	}
+	if home := cfg.TraeHome(); home != "" {
+		a := trae.New(home)
+		a.WorkspaceRoots = cfg.TraeWorkspaceRoots()
+		out = append(out, a)
+	}
+	if home := cfg.WorkBuddyHome(); home != "" {
+		out = append(out, workbuddy.New(home))
 	}
 	return out
 }

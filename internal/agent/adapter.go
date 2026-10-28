@@ -52,6 +52,13 @@ type Adapter interface {
 	ScanSessionUnits(ctx context.Context) ([]SessionUnit, error)
 }
 
+// Watchable 是适配器的可选接口：返回希望文件监听覆盖的目录。
+// 不实现它（或返回 nil）表示该 agent 只靠轮询兜底，避免把大量应用缓存
+// 变成扫描事件。路径应尽量窄，不要递归到无关子树。
+type Watchable interface {
+	WatchDirs() []string
+}
+
 // EventsWithSession 给适配器产出的事件补上库主键。
 // 转换只在这里发生：适配器不知道 id，store 不知道适配器结构。
 func EventsWithSession(sessionID int64, in []SessionEvent) []domain.SessionEvent {
