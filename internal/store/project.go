@@ -136,6 +136,29 @@ func (s *Store) ProjectIDForPath(ctx context.Context, agent, slug, rawPath, gitR
 	return id, key, nil
 }
 
+// ProjectIDsForHandoff 列出值得一份简报的项目：有项目级记忆或有任务卡的那些，
+// 按 id 升序保证多次运行产出顺序一致。
+func (s *Store) ProjectIDsForHandoff(ctx context.Context) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT DISTINCT id FROM (
+  SELECT project_id AS id FROM memory_item WHERE scope = 'project' AND project_id <> 0 AND stale = 0
+  UNION SELECT project_id FROM task_card WHERE project_id <> 0
+) ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 func baseName(p string) string {
 	p = normalize.ProjectKey("", p)
 	if i := lastSlash(p); i >= 0 {

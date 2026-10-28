@@ -44,6 +44,24 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "按 agent 的记忆条数: %v\n", stats.MemoriesByAgent)
 	fmt.Fprintf(stdout, "按类型的条数: %v\n", stats.MemoriesByType)
 
+	sessions, err := e.st.QueryInt(ctx, `SELECT count(*) FROM session`)
+	if err != nil {
+		return reportError(stderr, err)
+	}
+	cards, err := e.st.QueryInt(ctx, `SELECT count(*) FROM task_card`)
+	if err != nil {
+		return reportError(stderr, err)
+	}
+	handoffs, err := e.st.QueryInt(ctx, `SELECT count(*) FROM handoff`)
+	if err != nil {
+		return reportError(stderr, err)
+	}
+	byStatus, err := e.st.QueryStrings(ctx, `SELECT status || '=' || COUNT(*) FROM task_card GROUP BY status ORDER BY status`)
+	if err != nil {
+		return reportError(stderr, err)
+	}
+	fmt.Fprintf(stdout, "会话 %d，任务卡 %d，简报 %d（状态: %v）\n", sessions, cards, handoffs, byStatus)
+
 	fmt.Fprintf(stdout, "\n写入目标（本程序只会改这几处）:\n")
 	fmt.Fprintf(stdout, "  %s\n", e.cfg.DataDir)
 	fmt.Fprintf(stdout, "  %s\n", e.cfg.DBPath())

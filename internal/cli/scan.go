@@ -60,5 +60,10 @@ func cmdScan(args []string, stdout, stderr io.Writer) int {
 	if runErr != nil {
 		return reportError(stderr, runErr)
 	}
+	// 扫描成功后刷新简报：切 agent 不用重新描述，也不靠用户记得手动跑 handoff。
+	// 单个项目失败只有一行报告，不影响其他项目与本次扫描结果。
+	for _, line := range refreshHandoffs(ctx, e, *agentFilter) {
+		fmt.Fprintf(stdout, "  %s\n", line)
+	}
 	return 0
 }
