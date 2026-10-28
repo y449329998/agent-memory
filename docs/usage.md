@@ -432,6 +432,7 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 | 双击桌面应用窗口没出现 | 看 `~/.agent-memory/app.log` 末尾；常见原因是 47123 被占用（会弹窗），或 WebView2 运行时缺失（会自动改用 Edge/Chrome 应用窗口） |
 | 关掉桌面窗口后 agent 用不了记忆 | 正常情况下服务会继续在后台跑（`netstat -ano | findstr 47123` 应能看到 LISTENING）；若没有，重新双击应用 |
 | 桌面应用与命令行 serve 谁在跑 | 两者是同一个服务，端口都是 47123；谁先起就复用谁，不会重复启动 |
+| 升级 exe 时提示「文件被占用」 | 桌面应用拉起的服务就是 `agent-memory-app.exe --serve`，它锁着自身二进制。先结束监听 47123 的进程（任务管理器或 `taskkill`），再重建/替换 exe |
 
 ---
 
