@@ -11,8 +11,9 @@ import (
 	"github.com/muyi99/agent-memory/internal/normalize"
 )
 
-// EnsureProject 按 key 建或取项目。已存在时只补空字段并推进 updated_at，
-// 不覆盖已有 display_name / git_remote / primary_path，避免后来者以低质量信息盖掉高质量信息。
+// EnsureProject 按 key 建或取项目。已存在时只补空字段，updated_at 只进不退
+// （乱序扫描/回放传入更早时间时保持原值），也不覆盖已有 display_name / git_remote /
+// primary_path，避免后来者以低质量信息盖掉高质量信息。
 func (s *Store) EnsureProject(ctx context.Context, key, displayName, gitRemote, primaryPath string, at time.Time) (int64, error) {
 	if key == "" {
 		return 0, errors.New("project key is empty")
@@ -22,7 +23,7 @@ func (s *Store) EnsureProject(ctx context.Context, key, displayName, gitRemote, 
 INSERT INTO project(key, display_name, git_remote, primary_path, created_at, updated_at)
 VALUES(?, ?, ?, ?, ?, ?)
 ON CONFLICT(key) DO UPDATE SET
-  updated_at   = excluded.updated_at,
+  updated_at   = MAX(project.updated_at, excluded.updated_at),
   display_name = CASE WHEN project.display_name = '' THEN excluded.display_name ELSE project.display_name END,
   git_remote   = CASE WHEN project.git_remote   = '' THEN excluded.git_remote  ELSE project.git_remote  END,
   primary_path = CASE WHEN project.primary_path = '' THEN excluded.primary_path ELSE project.primary_path END`,
@@ -75,13 +76,19 @@ ON CONFLICT(project_id, agent, path) DO UPDATE SET
 	return err
 }
 
+// ResolveProjectByPath 反查路径对应的项目。同一物理路径可能先后被登记到不同项目
+// （唯一键含 project_id），因此必须显式排序：高置信度优先，其次最新登记（id 最大），
+// 避免结果依赖扫描顺序。
 func (s *Store) ResolveProjectByPath(ctx context.Context, path string) (int64, bool, error) {
 	key := normalize.ProjectKey("", path)
 	if key == "" {
 		return 0, false, nil
 	}
 	var id int64
-	err := s.db.QueryRowContext(ctx, `SELECT project_id FROM project_path WHERE path = ? LIMIT 1`, key).Scan(&id)
+	err := s.db.QueryRowContext(ctx, `
+SELECT project_id FROM project_path WHERE path = ?
+ORDER BY CASE confidence WHEN 'high' THEN 0 ELSE 1 END, id DESC
+LIMIT 1`, key).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, false, nil
 	}
