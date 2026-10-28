@@ -48,6 +48,7 @@ func New(cfg Config, st *store.Store) *Server {
 	s.mux.HandleFunc("GET /{$}", s.handleIndex)
 	s.mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /v1/stats", s.auth(s.handleStats))
+	s.mux.HandleFunc("GET /v1/projects", s.auth(s.handleListProjects))
 	s.mux.HandleFunc("POST /v1/search", s.auth(s.handleSearch))
 	s.mux.HandleFunc("POST /v1/memory", s.auth(s.handleAddMemory))
 	s.mux.HandleFunc("GET /v1/memory", s.auth(s.handleListMemory))
@@ -100,6 +101,30 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, stats)
+}
+
+// projectSummary 是 /v1/projects 的对外形状：只暴露前端需要的字段，
+// 用 snake_case 与其余接口保持一致，不把 git_remote 等内部信息带出去。
+type projectSummary struct {
+	ID          int64  `json:"id"`
+	Key         string `json:"key"`
+	DisplayName string `json:"display_name"`
+	PrimaryPath string `json:"primary_path"`
+}
+
+func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
+	projects, err := s.st.ListProjects(r.Context())
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	out := make([]projectSummary, 0, len(projects))
+	for _, p := range projects {
+		out = append(out, projectSummary{
+			ID: p.ID, Key: p.Key, DisplayName: p.DisplayName, PrimaryPath: p.PrimaryPath,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"projects": out})
 }
 
 type searchRequest struct {

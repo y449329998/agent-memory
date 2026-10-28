@@ -38,6 +38,33 @@ ON CONFLICT(key) DO UPDATE SET
 	return id, nil
 }
 
+// ListProjects 按 key 升序列出全部项目。时间列与 ProjectByKey 一样按 Unix 秒还原，
+// 供 Web UI 的项目下拉与后续按项目聚合使用。
+func (s *Store) ListProjects(ctx context.Context) ([]domain.Project, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, key, display_name, git_remote, primary_path, created_at, updated_at
+FROM project ORDER BY key`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]domain.Project, 0)
+	for rows.Next() {
+		var (
+			p       domain.Project
+			created int64
+			updated int64
+		)
+		if err := rows.Scan(&p.ID, &p.Key, &p.DisplayName, &p.GitRemote, &p.PrimaryPath, &created, &updated); err != nil {
+			return nil, err
+		}
+		p.CreatedAt = time.Unix(created, 0)
+		p.UpdatedAt = time.Unix(updated, 0)
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) ProjectByKey(ctx context.Context, key string) (domain.Project, bool, error) {
 	var p domain.Project
 	var created, updated int64

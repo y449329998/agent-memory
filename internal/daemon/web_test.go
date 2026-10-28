@@ -65,13 +65,88 @@ func TestIndexPageTokenAuth(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
 		t.Fatalf("content-type = %q, want text/html", ct)
 	}
-	if !strings.Contains(rec.Body.String(), "前端在下一任务实现") {
-		t.Fatalf("placeholder page missing: %q", rec.Body.String())
+	page := rec.Body.String()
+	if !strings.Contains(page, "搜索记忆") || !strings.Contains(page, "sessionStorage") {
+		t.Fatalf("web ui page missing expected content: %q", page)
+	}
+	if strings.Contains(page, "<script src=") || strings.Contains(page, "<link rel=\"stylesheet\"") {
+		t.Fatal("web ui must be a single self-contained page without external assets")
+	}
+	// 记忆正文来自外部文件，动态内容只能走 textContent；页面里不应出现 HTML 注入入口。
+	if strings.Contains(page, "innerHTML") || strings.Contains(page, "insertAdjacentHTML") {
+		t.Fatal("web ui must not use innerHTML/insertAdjacentHTML for dynamic content")
 	}
 
 	rec = webDo(t, s, http.MethodGet, "/", webToken, nil, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("bearer token: code = %d, want 200", rec.Code)
+	}
+}
+
+func TestProjectsEndpointEmpty(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	rec := webDo(t, s, http.MethodGet, "/v1/projects", "", nil, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("no token: code = %d, want 401", rec.Code)
+	}
+
+	rec = webDo(t, s, http.MethodGet, "/v1/projects", webToken, nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Body.String(); !strings.Contains(got, `"projects":[]`) {
+		t.Fatalf("empty db should return an empty array, got %s", got)
+	}
+	var out struct {
+		Projects []projectSummary `json:"projects"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Projects == nil || len(out.Projects) != 0 {
+		t.Fatalf("projects = %#v, want non-nil empty slice", out.Projects)
+	}
+}
+
+func TestProjectsEndpointSortedByKey(t *testing.T) {
+	s, st := newTestServer(t)
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0)
+	// 故意先插 z 再插 a：返回顺序必须由 SQL 的 ORDER BY key 决定，而不是插入顺序。
+	for _, p := range []struct{ key, name, path string }{
+		{"z/repo", "Z 仓库", `F:\work\z`},
+		{"a/repo", "A 仓库", `F:\work\a`},
+	} {
+		if _, err := st.EnsureProject(ctx, p.key, p.name, "", p.path, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rec := webDo(t, s, http.MethodGet, "/v1/projects", webToken, nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Projects []projectSummary `json:"projects"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Projects) != 2 {
+		t.Fatalf("projects = %+v, want 2", out.Projects)
+	}
+	if out.Projects[0].Key != "a/repo" || out.Projects[1].Key != "z/repo" {
+		t.Fatalf("projects not sorted by key: %+v", out.Projects)
+	}
+	if out.Projects[0].DisplayName != "A 仓库" || out.Projects[0].PrimaryPath != `F:\work\a` {
+		t.Fatalf("project fields wrong: %+v", out.Projects[0])
+	}
+	if out.Projects[0].ID == 0 || out.Projects[1].ID == 0 {
+		t.Fatalf("project ids missing: %+v", out.Projects)
+	}
+	if strings.Contains(rec.Body.String(), `"DisplayName"`) {
+		t.Fatalf("response should use snake_case keys: %s", rec.Body.String())
 	}
 }
 
