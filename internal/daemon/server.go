@@ -108,25 +108,33 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 // projectSummary 是 /v1/projects 的对外形状：只暴露前端需要的字段，
 // 用 snake_case 与其余接口保持一致，不把 git_remote 等内部信息带出去。
 type projectSummary struct {
-	ID          int64  `json:"id"`
-	Key         string `json:"key"`
-	DisplayName string `json:"display_name"`
-	PrimaryPath string `json:"primary_path"`
+	ID           int64  `json:"id"`
+	Key          string `json:"key"`
+	DisplayName  string `json:"display_name"`
+	PrimaryPath  string `json:"primary_path"`
+	MemoryCount  int    `json:"memory_count"`
+	StaleCount   int    `json:"stale_count"`
+	LastMemoryAt string `json:"last_memory_at"`
 }
 
 func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
-	projects, err := s.st.ListProjects(r.Context())
+	summaries, err := s.st.ListProjectSummaries(r.Context())
 	if err != nil {
 		httpError(w, err)
 		return
 	}
-	out := make([]projectSummary, 0, len(projects))
-	for _, p := range projects {
+	out := make([]projectSummary, 0, len(summaries))
+	for _, p := range summaries {
+		last := ""
+		if !p.LastMemoryAt.IsZero() {
+			last = p.LastMemoryAt.Format(time.RFC3339)
+		}
 		out = append(out, projectSummary{
 			ID: p.ID, Key: p.Key, DisplayName: p.DisplayName, PrimaryPath: p.PrimaryPath,
+			MemoryCount: p.MemoryCount, StaleCount: p.StaleCount, LastMemoryAt: last,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"projects": out})
+	writeJSON(w, http.StatusOK, map[string]any{"projects": out, "count": len(out)})
 }
 
 type searchRequest struct {

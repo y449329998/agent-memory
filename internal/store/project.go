@@ -252,3 +252,51 @@ func lastSlash(s string) int {
 	}
 	return -1
 }
+
+// ProjectSummary 是项目带记忆计数的只读视图，供项目下拉与「项目」抽屉使用。
+type ProjectSummary struct {
+	ID           int64
+	Key          string
+	DisplayName  string
+	PrimaryPath  string
+	MemoryCount  int
+	StaleCount   int
+	LastMemoryAt time.Time
+}
+
+func (s *Store) ListProjectSummaries(ctx context.Context) ([]ProjectSummary, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT p.id, p.key, p.display_name, p.primary_path,
+       COUNT(m.id),
+       SUM(CASE WHEN m.stale = 1 THEN 1 ELSE 0 END),
+       COALESCE(MAX(m.last_seen_at), 0)
+FROM project p
+LEFT JOIN memory_item m ON m.project_id = p.id AND m.scope = 'project'
+GROUP BY p.id
+ORDER BY p.key`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ProjectSummary
+	for rows.Next() {
+		var (
+			ps       ProjectSummary
+			lastSeen int64
+			stale    sql.NullInt64
+		)
+		if err := rows.Scan(&ps.ID, &ps.Key, &ps.DisplayName, &ps.PrimaryPath,
+			&ps.MemoryCount, &stale, &lastSeen); err != nil {
+			return nil, err
+		}
+		if stale.Valid {
+			ps.StaleCount = int(stale.Int64)
+		}
+		if lastSeen != 0 {
+			ps.LastMemoryAt = time.Unix(lastSeen, 0)
+		}
+		out = append(out, ps)
+	}
+	return out, rows.Err()
+}
