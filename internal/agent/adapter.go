@@ -51,3 +51,22 @@ type Adapter interface {
 	ScanMemoryUnits(ctx context.Context) ([]MemoryUnit, error)
 	ScanSessionUnits(ctx context.Context) ([]SessionUnit, error)
 }
+
+// EventsWithSession 给适配器产出的事件补上库主键。
+// 转换只在这里发生：适配器不知道 id，store 不知道适配器结构。
+func EventsWithSession(sessionID int64, in []SessionEvent) []domain.SessionEvent {
+	out := make([]domain.SessionEvent, 0, len(in))
+	for _, e := range in {
+		out = append(out, domain.SessionEvent{
+			SessionID: sessionID,
+			Seq:       e.Seq,
+			Role:      e.Role,
+			Kind:      e.Kind,
+			Text:      e.Text,
+			Tool:      e.Tool,
+			Files:     e.Files,
+			Ts:        e.Ts,
+		})
+	}
+	return out
+}

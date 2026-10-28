@@ -8,6 +8,7 @@ import (
 
 	"github.com/muyi99/agent-memory/internal/agent"
 	"github.com/muyi99/agent-memory/internal/domain"
+	"github.com/muyi99/agent-memory/internal/extract"
 	"github.com/muyi99/agent-memory/internal/normalize"
 	"github.com/muyi99/agent-memory/internal/store"
 )
@@ -20,12 +21,19 @@ type Result struct {
 	Merged    int
 	Unchanged int
 	Staled    int
-	Errors    []string
+
+	Sessions         int
+	SessionUnchanged int
+	Cards            int
+	SkippedUnsettled int
+
+	Errors []string
 }
 
 func (r Result) String() string {
-	base := fmt.Sprintf("units=%d created=%d merged=%d unchanged=%d staled=%d",
-		r.Units, r.Created, r.Merged, r.Unchanged, r.Staled)
+	base := fmt.Sprintf("units=%d created=%d merged=%d unchanged=%d staled=%d sessions=%d sessions_unchanged=%d cards=%d unsettled=%d",
+		r.Units, r.Created, r.Merged, r.Unchanged, r.Staled,
+		r.Sessions, r.SessionUnchanged, r.Cards, r.SkippedUnsettled)
 	if len(r.Errors) == 0 {
 		return base
 	}
@@ -39,10 +47,17 @@ type Runner struct {
 	adapters []agent.Adapter
 	// RemoteReader 可读 git remote；测试里替换掉，默认实现直接解析 .git/config。
 	RemoteReader func(dir string) (string, bool, error)
+	// SettleIdle 是「会话算写完」的空闲阈值，默认 5 分钟。
+	SettleIdle time.Duration
 }
 
 func New(st *store.Store, adapters ...agent.Adapter) *Runner {
-	return &Runner{store: st, adapters: adapters, RemoteReader: normalize.GitRemoteFromConfig}
+	return &Runner{
+		store:        st,
+		adapters:     adapters,
+		RemoteReader: normalize.GitRemoteFromConfig,
+		SettleIdle:   5 * time.Minute,
+	}
 }
 
 // ValidateAgent 校验 --agent 过滤值：空串表示全部，其余必须是已配置的适配器名。
@@ -115,7 +130,7 @@ func (r *Runner) Run(ctx context.Context, onlyAgent string) (Result, error) {
 				continue
 			}
 
-			projectID, err := r.projectFor(ctx, u.Drafts, at)
+			projectID, err := r.projectForDraft(ctx, u.Drafts, at)
 			if err != nil {
 				// 归属不明的源不写哈希：下一轮还会重试，而不是被当成「已处理」
 				res.Errors = append(res.Errors, fmt.Sprintf("%s: project: %v", u.Path, err))
@@ -143,6 +158,84 @@ func (r *Runner) Run(ctx context.Context, onlyAgent string) (Result, error) {
 
 			if err := r.store.PutSource(ctx, domain.SourceState{
 				Agent: a.Name(), Kind: "memory", Path: u.Path,
+				ContentHash: hash, MTime: u.MTime, Size: u.Size,
+			}, runAt); err != nil {
+				return res, err
+			}
+		}
+
+		sUnits, err := a.ScanSessionUnits(ctx)
+		if err != nil {
+			res.Errors = append(res.Errors, fmt.Sprintf("%s sessions: %v", a.Name(), err))
+			continue
+		}
+		for _, u := range sUnits {
+			res.Sessions++
+			if err := ctx.Err(); err != nil {
+				return res, err
+			}
+
+			if u.Err != nil {
+				res.Errors = append(res.Errors, fmt.Sprintf("%s: %v", u.Path, u.Err))
+				if err := r.store.MarkSourceError(ctx, a.Name(), "session", u.Path, u.Err.Error(), runAt); err != nil {
+					return res, err
+				}
+				continue
+			}
+
+			// 会话与记忆共用同一套源门控：内容没变就只登记「本轮见过」，
+			// 不重写会话与事件（事件整体替换的代价高，且会丢掉已有的卡）。
+			hash := normalize.HashBytes(u.Content)
+			prev, seen, err := r.store.SourceHash(ctx, a.Name(), "session", u.Path)
+			if err != nil {
+				return res, err
+			}
+			if seen && prev == hash {
+				res.SessionUnchanged++
+				if err := r.store.TouchSource(ctx, a.Name(), "session", u.Path, runAt); err != nil {
+					return res, err
+				}
+				continue
+			}
+
+			projectID, err := r.resolveProject(ctx, a.Name(), u.Session.ProjectSlug, u.Session.ProjectPath, u.Session.Confidence, at)
+			if err != nil {
+				res.Errors = append(res.Errors, fmt.Sprintf("%s: project: %v", u.Path, err))
+				continue
+			}
+
+			sess := u.Session
+			sess.Agent = a.Name()
+			sess.ProjectID = projectID
+			sessID, err := r.store.UpsertSession(ctx, sess)
+			if err != nil {
+				res.Errors = append(res.Errors, fmt.Sprintf("%s: %v", u.Path, err))
+				continue
+			}
+
+			events := agent.EventsWithSession(sessID, u.Events)
+			if err := r.store.ReplaceEvents(ctx, sessID, events); err != nil {
+				return res, err
+			}
+
+			// 是否出卡只看源文件 mtime：还在写的会话只导入事件，等下一轮再提炼。
+			if extract.Settled(u.MTime, time.Now(), r.SettleIdle) {
+				card, ok := extract.TaskCard(sess, events, time.Now())
+				if ok {
+					card.SessionID = sessID
+					card.ProjectID = projectID
+					if _, err := r.store.UpsertTaskCard(ctx, card); err != nil {
+						res.Errors = append(res.Errors, fmt.Sprintf("%s: card: %v", u.Path, err))
+					} else {
+						res.Cards++
+					}
+				}
+			} else {
+				res.SkippedUnsettled++
+			}
+
+			if err := r.store.PutSource(ctx, domain.SourceState{
+				Agent: a.Name(), Kind: "session", Path: u.Path,
 				ContentHash: hash, MTime: u.MTime, Size: u.Size,
 			}, runAt); err != nil {
 				return res, err
@@ -177,15 +270,8 @@ func (r *Runner) runMarker(ctx context.Context) (int64, error) {
 	return now, nil
 }
 
-// projectFor 决定这批草稿属于哪个项目。
-//
-// 低置信（只有 slug 反解出来的路径）时故意建一个 agent 专有的独立项目，
-// 并且不写 project_path 映射：slug 里的 '-' 既可能是层级分隔符也可能是项目名的一部分，
-// 猜错就会把两个不同项目并成一个，那比留两个孤立项目更糟。
-//
-// 高置信时先按路径反查——同一份 checkout 重扫应当命中同一个项目；
-// 未命中再读 .git/config 的 remote，让同一仓库的多份 checkout 合并成一个项目。
-func (r *Runner) projectFor(ctx context.Context, drafts []domain.MemoryDraft, at time.Time) (int64, error) {
+// projectForDraft 决定这批草稿属于哪个项目。空草稿或用户级草稿返回 0。
+func (r *Runner) projectForDraft(ctx context.Context, drafts []domain.MemoryDraft, at time.Time) (int64, error) {
 	if len(drafts) == 0 {
 		return 0, nil
 	}
@@ -193,20 +279,30 @@ func (r *Runner) projectFor(ctx context.Context, drafts []domain.MemoryDraft, at
 	if d.Scope != domain.ScopeProject {
 		return 0, nil
 	}
+	return r.resolveProject(ctx, d.SourceAgent, d.ProjectSlug, d.ProjectPath, d.Confidence, at)
+}
 
-	if d.Confidence != "high" || d.ProjectPath == "" {
-		if d.ProjectSlug == "" {
-			return 0, fmt.Errorf("project-scope memory without usable path or slug: %s", d.SourcePath)
+// resolveProject 是记忆与会话共用的项目归属逻辑。
+//
+// 低置信（只有 slug 反解出来的路径）时故意建一个 agent 专有的独立项目，
+// 并且不写 project_path 映射：slug 里的 '-' 既可能是层级分隔符也可能是项目名的一部分，
+// 猜错就会把两个不同项目并成一个，那比留两个孤立项目更糟。
+//
+// 高置信时先按路径反查——同一份 checkout 重扫应当命中同一个项目；
+// 未命中再读 .git/config 的 remote，让同一仓库的多份 checkout 合并成一个项目。
+func (r *Runner) resolveProject(ctx context.Context, agent, slug, path, confidence string, at time.Time) (int64, error) {
+	if confidence != "high" || path == "" {
+		if slug == "" {
+			return 0, fmt.Errorf("project without usable path or slug (agent %s)", agent)
 		}
-		return r.store.EnsureProject(ctx, d.SourceAgent+":"+d.ProjectSlug, d.ProjectSlug, "", "", at)
+		return r.store.EnsureProject(ctx, agent+":"+slug, slug, "", "", at)
 	}
 
-	path := d.ProjectPath
 	if id, ok, err := r.store.ResolveProjectByPath(ctx, path); err != nil {
 		return 0, err
 	} else if ok {
 		// 同一路径已经归属某个项目：补记本 agent 的 slug 关联，映射表随扫描收敛
-		if err := r.store.LinkProjectPath(ctx, id, d.SourceAgent, d.ProjectSlug, path, "high"); err != nil {
+		if err := r.store.LinkProjectPath(ctx, id, agent, slug, path, "high"); err != nil {
 			return 0, err
 		}
 		return id, nil
@@ -219,6 +315,6 @@ func (r *Runner) projectFor(ctx context.Context, drafts []domain.MemoryDraft, at
 			remote = v
 		}
 	}
-	id, _, err := r.store.ProjectIDForPath(ctx, d.SourceAgent, d.ProjectSlug, path, remote, at)
+	id, _, err := r.store.ProjectIDForPath(ctx, agent, slug, path, remote, at)
 	return id, err
 }

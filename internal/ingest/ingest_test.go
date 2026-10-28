@@ -359,3 +359,158 @@ func TestValidateAgent(t *testing.T) {
 		t.Fatalf("want unknown-agent error, got %v", err)
 	}
 }
+
+// TestRun_ImportsSessionsAndCardsWhenSettled 覆盖「一轮扫描同时导入记忆与会话」：
+// 已写完的会话出任务卡，还在写的只导入会话与事件。
+func TestRun_ImportsSessionsAndCardsWhenSettled(t *testing.T) {
+	home, repoA, repoB := fakeQoder(t)
+	// fixture 自带两个只含 workspace 行的占位会话，这里换成带事件的真会话。
+	write(t, filepath.Join(home, "projects", "RA", "a.jsonl"),
+		fmt.Sprintf("{\"type\":\"workspace-directories\",\"sessionId\":\"s1\",\"directories\":[%q]}\n", repoA)+
+			"{\"type\":\"user\",\"sessionId\":\"s1\",\"timestamp\":\"2026-10-27T09:00:00Z\",\"message\":{\"role\":\"user\",\"content\":\"给扣减加乐观锁\"}}\n"+
+			"{\"type\":\"assistant\",\"sessionId\":\"s1\",\"timestamp\":\"2026-10-27T09:01:00Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"name\":\"Edit\",\"input\":{\"file_path\":\"F:\\\\a.go\"}}]}}\n")
+	write(t, filepath.Join(home, "projects", "RB", "b.jsonl"),
+		fmt.Sprintf("{\"type\":\"workspace-directories\",\"sessionId\":\"s2\",\"directories\":[%q]}\n", repoB)+
+			"{\"type\":\"user\",\"sessionId\":\"s2\",\"timestamp\":\"2026-10-27T09:00:00Z\",\"message\":{\"role\":\"user\",\"content\":\"还在写的会话\"}}\n")
+
+	// 「已经写完」用文件 mtime 表达：RA 推到 1 小时前，RB 保持当前时间。
+	settled := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(filepath.Join(home, "projects", "RA", "a.jsonl"), settled, settled); err != nil {
+		t.Fatal(err)
+	}
+	fresh := time.Now()
+	if err := os.Chtimes(filepath.Join(home, "projects", "RB", "b.jsonl"), fresh, fresh); err != nil {
+		t.Fatal(err)
+	}
+
+	s := openTempStore(t)
+	r := New(s, qoder.New(home))
+	r.SettleIdle = 5 * time.Minute
+	res, err := r.Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Units != 3 || res.Created != 3 {
+		t.Fatalf("memories must import in the same scan: units=%d created=%d", res.Units, res.Created)
+	}
+	if res.Sessions != 2 {
+		t.Fatalf("sessions = %d, want 2", res.Sessions)
+	}
+	if res.Cards != 1 {
+		t.Fatalf("cards = %d, want 1（未写完的会话不该出卡）", res.Cards)
+	}
+	if res.SkippedUnsettled != 1 {
+		t.Fatalf("skipped = %d, want 1", res.SkippedUnsettled)
+	}
+	t.Logf("first scan: %s", res.String())
+	t.Logf("task_card rows = %d", mustInt(t, s, `SELECT count(*) FROM task_card`))
+
+	goal, err := s.QueryStrings(context.Background(), `SELECT goal FROM task_card`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(goal) != 1 || goal[0] != "给扣减加乐观锁" {
+		t.Fatalf("goals = %v", goal)
+	}
+	if got := mustInt(t, s, `SELECT count(*) FROM session_event WHERE kind = 'tool_edit'`); got != 1 {
+		t.Fatalf("edit events = %d, want 1", got)
+	}
+
+	// 第二次扫描：内容没变的会话整批跳过，卡片不重复产出，事件也不重写。
+	second, err := r.Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.SessionUnchanged != 2 || second.Cards != 0 {
+		t.Fatalf("second run = %+v, want unchanged sessions and no new cards", second)
+	}
+	if second.SkippedUnsettled != 0 {
+		t.Fatalf("unchanged sessions must not reach the settle check: %+v", second)
+	}
+	if got := mustInt(t, s, `SELECT count(*) FROM session_event`); got != 3 {
+		t.Fatalf("events rewritten on unchanged scan: %d rows, want 3", got)
+	}
+	if got := mustInt(t, s, `SELECT count(*) FROM task_card`); got != 1 {
+		t.Fatalf("task cards duplicated: %d rows, want 1", got)
+	}
+	t.Logf("second scan: %s", second.String())
+}
+
+// TestRun_SessionProjectMatchesMemoryProject 验证会话与记忆共用同一条归属逻辑：
+// 同一个项目目录下的两份源必须落到同一个 project_id。
+func TestRun_SessionProjectMatchesMemoryProject(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, ".qoder-cn")
+	repo := filepath.Join(root, "repos", "alpha")
+	write(t, filepath.Join(home, "projects", "RA", "memory", "m.md"),
+		"---\nmetadata:\n  type: project\n---\n\nalpha 项目状态。\n")
+	write(t, filepath.Join(home, "projects", "RA", "s1.jsonl"),
+		fmt.Sprintf("{\"type\":\"workspace-directories\",\"sessionId\":\"s1\",\"directories\":[%q]}\n", repo)+
+			"{\"type\":\"user\",\"sessionId\":\"s1\",\"timestamp\":\"2026-10-27T09:00:00Z\",\"message\":{\"role\":\"user\",\"content\":\"目标\"}}\n")
+	settled := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(filepath.Join(home, "projects", "RA", "s1.jsonl"), settled, settled); err != nil {
+		t.Fatal(err)
+	}
+
+	s := openTempStore(t)
+	if _, err := New(s, qoder.New(home)).Run(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.QueryStrings(context.Background(), `
+SELECT DISTINCT (SELECT key FROM project WHERE id = m.project_id)
+FROM memory_item m WHERE m.scope = 'project' AND m.project_id <> 0`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("project keys from memory = %v, want exactly one", rows)
+	}
+	shared, err := s.QueryStrings(context.Background(), `
+SELECT DISTINCT s.project_id FROM session s
+JOIN memory_item m ON m.project_id = s.project_id
+WHERE m.scope = 'project' AND m.project_id <> 0`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shared) != 1 {
+		t.Fatalf("session and memory must share a project, got %v", shared)
+	}
+	if got := mustInt(t, s, `SELECT count(*) FROM session WHERE project_id = 0`); got != 0 {
+		t.Fatalf("%d sessions left without a project", got)
+	}
+	sessPID := mustInt(t, s, `SELECT project_id FROM session WHERE external_id = 's1'`)
+	memPID := mustInt(t, s, `SELECT DISTINCT project_id FROM memory_item WHERE scope = 'project' AND project_id <> 0`)
+	t.Logf("memory project keys=%v session project_id=%d memory project_id=%d same=%v",
+		rows, sessPID, memPID, sessPID == memPID)
+}
+
+func TestRun_SessionSourceErrorIsRecorded(t *testing.T) {
+	home, _, _ := fakeQoder(t)
+	// 无 workspace-directories 的会话：适配器给出带 Err 的单元，ingest 记错但不中断
+	write(t, filepath.Join(home, "projects", "RA", "orphan.jsonl"),
+		"{\"type\":\"user\",\"sessionId\":\"o\",\"timestamp\":\"2026-10-27T09:00:00Z\",\"message\":{\"role\":\"user\",\"content\":\"x\"}}\n")
+	s := openTempStore(t)
+	res, err := New(s, qoder.New(home)).Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Sessions < 1 || len(res.Errors) == 0 {
+		t.Fatalf("want a recorded session error: %+v", res)
+	}
+	if got := mustInt(t, s, `SELECT count(*) FROM source WHERE kind = 'session' AND last_error <> ''`); got == 0 {
+		t.Fatal("session error not persisted")
+	}
+	// 坏源不能挡住同目录与其他目录的健康会话
+	if got := mustInt(t, s, `SELECT count(*) FROM session`); got != 2 {
+		t.Fatalf("healthy sessions = %d, want 2", got)
+	}
+}
+
+func TestResult_StringCoversSessionCounts(t *testing.T) {
+	got := Result{Units: 1, Created: 1, Sessions: 2, SessionUnchanged: 3, Cards: 1, SkippedUnsettled: 1}.String()
+	for _, want := range []string{"sessions=2", "sessions_unchanged=3", "cards=1", "unsettled=1"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %q", want, got)
+		}
+	}
+}

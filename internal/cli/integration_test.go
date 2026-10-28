@@ -112,7 +112,7 @@ func TestEndToEnd_InitScanSearchAddDoctor(t *testing.T) {
 	if code := run(t, &out, "scan", "--full"); code != 0 {
 		t.Fatalf("scan --full exit %d", code)
 	}
-	if !strings.Contains(out.String(), "已重置 2 个扫描游标") {
+	if !strings.Contains(out.String(), "已重置 3 个扫描游标") {
 		t.Fatalf("scan --full should report reset cursors, got %q", out.String())
 	}
 	if !strings.Contains(out.String(), "created=0") || !strings.Contains(out.String(), "merged=2") {
