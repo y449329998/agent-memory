@@ -118,6 +118,17 @@ func TestResetSources_ClearsHashGateForFullScan(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()
 	run := time.Unix(1700000000, 0).Unix()
+	// 先放一条记忆：full 扫描是重放，reset 只清游标，不能碰内容
+	if _, _, err := s.UpsertMemory(ctx, 0, domain.MemoryDraft{Scope: domain.ScopeUser, Type: domain.TypeFact, Text: "x", SourceAgent: "qoder", SourcePath: "/q/a.md"}, time.Unix(run, 0)); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.QueryInt(ctx, `SELECT count(*) FROM memory_item`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != 1 {
+		t.Fatalf("memory_item count before reset = %d, want 1", before)
+	}
 	if err := s.PutSource(ctx, domain.SourceState{Agent: "qoder", Kind: "memory", Path: "/q/a.md", ContentHash: "h1"}, run); err != nil {
 		t.Fatal(err)
 	}
@@ -131,12 +142,30 @@ func TestResetSources_ClearsHashGateForFullScan(t *testing.T) {
 	if n != 2 {
 		t.Fatalf("reset %d rows, want 2", n)
 	}
+	after, err := s.QueryInt(ctx, `SELECT count(*) FROM memory_item`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("reset changed memory_item count: before=%d after=%d", before, after)
+	}
 	if _, ok, err := s.SourceHash(ctx, "qoder", "memory", "/q/a.md"); err != nil || ok {
 		t.Fatalf("source row should be gone: ok=%v err=%v", ok, err)
 	}
-	// 记忆条目本身不受影响：full 扫描是重放，不是重置内容
-	if _, _, err := s.UpsertMemory(ctx, 0, domain.MemoryDraft{Scope: domain.ScopeUser, Type: domain.TypeFact, Text: "x", SourceAgent: "qoder", SourcePath: "/q/a.md"}, time.Unix(run, 0)); err != nil {
+
+	// 重置别的 agent 不得清掉 qoder 的游标
+	if err := s.PutSource(ctx, domain.SourceState{Agent: "qoder", Kind: "memory", Path: "/q/a.md", ContentHash: "h1"}, run); err != nil {
 		t.Fatal(err)
+	}
+	other, err := s.ResetSources(ctx, "other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other != 0 {
+		t.Fatalf("reset other removed %d rows, want 0", other)
+	}
+	if _, ok, err := s.SourceHash(ctx, "qoder", "memory", "/q/a.md"); err != nil || !ok {
+		t.Fatalf("reset other must keep qoder rows: ok=%v err=%v", ok, err)
 	}
 }
 

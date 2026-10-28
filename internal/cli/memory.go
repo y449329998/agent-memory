@@ -50,7 +50,7 @@ func memorySearch(args []string, stdout, stderr io.Writer) int {
 	}
 	query := strings.Join(fs.Args(), " ")
 	if query == "" {
-		fmt.Fprintln(stderr, "usage: agent-memory memory search <关键词>")
+		fmt.Fprintln(stderr, "usage: agent-memory memory search <关键词> [--]")
 		return 2
 	}
 
@@ -107,7 +107,7 @@ func memoryAdd(args []string, stdout, stderr io.Writer) int {
 	}
 	text := strings.Join(fs.Args(), " ")
 	if strings.TrimSpace(text) == "" {
-		fmt.Fprintln(stderr, "usage: agent-memory memory add <文本> [--type T] [--scope S] [--project P]")
+		fmt.Fprintln(stderr, "usage: agent-memory memory add <文本> [--type T] [--scope S] [--project P] [--]")
 		return 2
 	}
 	if !domain.ValidMemoryType(domain.MemoryType(*typ)) {
@@ -131,7 +131,15 @@ func memoryAdd(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "error: --scope project 需要 --project <绝对路径>")
 			return 2
 		}
-		if projectID, _, err = e.st.ProjectIDForPath(ctx, *agentName, "", *projectRef, "", time.Now()); err != nil {
+		// 路径已被扫描登记过项目（可能以 git remote 为 key）时必须复用，
+		// 否则会再造一个按路径命名的项目，把扫描来的项目孤立掉。
+		id, ok, err := e.st.ResolveProjectByPath(ctx, *projectRef)
+		if err != nil {
+			return reportError(stderr, err)
+		}
+		if ok {
+			projectID = id
+		} else if projectID, _, err = e.st.ProjectIDForPath(ctx, *agentName, "", *projectRef, "", time.Now()); err != nil {
 			return reportError(stderr, err)
 		}
 	default:

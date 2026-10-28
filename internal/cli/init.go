@@ -32,14 +32,22 @@ func cmdInit(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return reportError(stderr, err)
 	}
-	if *dataDir != "" {
-		cfg.DataDir = *dataDir
-	}
 
-	if _, statErr := os.Stat(cfgPath); statErr == nil && !*force {
+	_, statErr := os.Stat(cfgPath)
+	cfgExists := statErr == nil
+	if cfgExists && !*force {
 		fmt.Fprintf(stdout, "配置文件已存在，保持不变: %s（--force 覆盖）\n", cfgPath)
-	} else if err := config.Save(cfgPath, cfg); err != nil {
-		return reportError(stderr, err)
+		if *dataDir != "" {
+			// 配置没写入，就不能按新目录建库/打印，否则 config.toml 与实际库不一致。
+			fmt.Fprintf(stdout, "忽略 --data-dir %s：配置文件未改动，要改数据目录请配合 --force\n", *dataDir)
+		}
+	} else {
+		if *dataDir != "" {
+			cfg.DataDir = *dataDir
+		}
+		if err := config.Save(cfgPath, cfg); err != nil {
+			return reportError(stderr, err)
+		}
 	}
 
 	// 打开一次即可建表；后续子命令复用同一个库

@@ -14,10 +14,9 @@ var (
 	spaceRE  = regexp.MustCompile(`\s+`)
 )
 
-// DisplayText 是给用户看的版本：与 CanonicalText 共享 NFKC、去代码围栏、去 bullet、
-// 折叠空白这些排版清洗，但**不转小写**。标识符与路径的大小写必须保留。
-func DisplayText(s string) string {
-	s = norm.NFKC.String(s)
+// cleanLayout 是两种文本共用的排版清洗：去代码围栏、循环去 bullet、折叠空白。
+// 每轮先 TrimSpace，保证结果幂等。
+func cleanLayout(s string) string {
 	s = strings.ReplaceAll(s, "```", " ")
 	for {
 		s = strings.TrimSpace(s)
@@ -30,10 +29,16 @@ func DisplayText(s string) string {
 	return spaceRE.ReplaceAllString(strings.TrimSpace(s), " ")
 }
 
-// CanonicalText 产出用于去重比较的文本：在 DisplayText 的排版清洗之上再小写。
-// 归一化结果同时是 FTS 的索引文本，所以两者必须同源。
+// DisplayText 是给用户看的版本：只做 NFC 排版清洗，**不做兼容分解**，
+// 所以「：；（），！」等全角标点原样保留；也不转小写，标识符与路径的大小写必须保留。
+func DisplayText(s string) string {
+	return cleanLayout(norm.NFC.String(s))
+}
+
+// CanonicalText 产出用于去重比较与 FTS 的文本：先 NFKC 兼容分解（全角 ASCII 折叠、
+// 全角标点折成半角），再走同一套排版清洗并小写。哈希/唯一键/分词的输入完全不变。
 func CanonicalText(s string) string {
-	return strings.ToLower(DisplayText(s))
+	return strings.ToLower(cleanLayout(norm.NFKC.String(s)))
 }
 
 func Hash(s string) string {

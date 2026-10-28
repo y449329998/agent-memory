@@ -2,11 +2,15 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/muyi99/agent-memory/internal/store"
 )
 
 // isolateHome 把用户主目录指向临时目录，并在那里放一个假的 Qoder home。
@@ -176,8 +180,194 @@ func TestMemorySearch_EmptyQueryIsUsageError(t *testing.T) {
 	if code := run(t, &out, "memory", "search"); code != 2 {
 		t.Fatalf("want exit 2, got %d", code)
 	}
-	if !strings.Contains(out.String(), "usage: agent-memory memory search") {
-		t.Fatalf("want usage, got %q", out.String())
+	if !strings.Contains(out.String(), "usage: agent-memory memory search <关键词> [--]") {
+		t.Fatalf("want usage with -- escape hint, got %q", out.String())
+	}
+}
+
+// TestMemoryAdd_DoubleDashAllowsLeadingDashText 回归：`--` 必须交给 flag.Parse，
+// 否则标准逃逸失效，以 '-' 开头的记忆文本会被当成未定义 flag。
+func TestMemoryAdd_DoubleDashAllowsLeadingDashText(t *testing.T) {
+	isolateHome(t)
+	var out bytes.Buffer
+	if code := run(t, &out, "memory", "add", "--", "-5% 扣减阈值"); code != 0 {
+		t.Fatalf("add with -- should exit 0, got %d: %s", code, out.String())
+	}
+
+	out.Reset()
+	if code := run(t, &out, "memory", "search", "--", "-5%"); code != 0 {
+		t.Fatalf("search with -- should exit 0, got %d: %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "扣减阈值") {
+		t.Fatalf("search should hit the dashed memory, got %q", out.String())
+	}
+}
+
+func TestMemoryAdd_UnknownFlagAfterTextExits2(t *testing.T) {
+	isolateHome(t)
+	var out bytes.Buffer
+	if code := run(t, &out, "memory", "add", "文本", "--bogus"); code != 2 {
+		t.Fatalf("want exit 2, got %d: %s", code, out.String())
+	}
+}
+
+// TestMemoryAdd_ReusesScannedProjectByPath 回归：add --project 命中已扫描的
+// git-remote 项目时必须复用，而不是再建一个按路径命名的第二个项目。
+func TestMemoryAdd_ReusesScannedProjectByPath(t *testing.T) {
+	home, _, repo := isolateHome(t)
+	mustWrite(t, filepath.Join(repo, ".git", "config"),
+		"[remote \"origin\"]\n\turl = git@example.com:acme/demo.git\n")
+
+	var out bytes.Buffer
+	if code := run(t, &out, "scan"); code != 0 {
+		t.Fatalf("scan exit %d: %s", code, out.String())
+	}
+
+	out.Reset()
+	if code := run(t, &out, "memory", "add", "扣减阈值需配置化", "--scope", "project", "--project", repo); code != 0 {
+		t.Fatalf("add --project exit %d: %s", code, out.String())
+	}
+
+	st, err := store.Open(filepath.Join(home, ".agent-memory", "memory.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+
+	n, err := st.QueryInt(ctx, `SELECT count(*) FROM project`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		keys, _ := st.QueryStrings(ctx, `SELECT key FROM project ORDER BY key`)
+		t.Fatalf("project rows = %d %v, want 1 (add must reuse the scanned project)", n, keys)
+	}
+
+	projectID, err := st.QueryInt(ctx, `SELECT id FROM project WHERE key = 'example.com/acme/demo'`)
+	if err != nil || projectID == 0 {
+		t.Fatalf("remote-keyed project not found: id=%d err=%v", projectID, err)
+	}
+	shared, err := st.QueryInt(ctx,
+		`SELECT count(*) FROM memory_item WHERE scope = 'project' AND project_id = ?`, projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shared != 2 {
+		t.Fatalf("project-scope memories under project_id %d = %d, want 2 (scan + CLI add)", projectID, shared)
+	}
+	t.Logf("project rows=%d, key=example.com/acme/demo project_id=%d, project-scope memories=%d", n, projectID, shared)
+}
+
+func TestDoctor_BadSinceIsUsageErrorWithNoPartialReport(t *testing.T) {
+	isolateHome(t)
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"doctor", "--since", "bogus"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("want exit 2, got %d", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("doctor printed a partial report before the usage error: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "bad --since") {
+		t.Fatalf("want bad --since explanation, got %q", stderr.String())
+	}
+}
+
+func TestInit_ExistingConfigIgnoresDataDirWithoutForce(t *testing.T) {
+	home, _, _ := isolateHome(t)
+	var out bytes.Buffer
+	if code := run(t, &out, "init"); code != 0 {
+		t.Fatalf("init exit %d", code)
+	}
+	cfgPath := filepath.Join(home, ".agent-memory", "config.toml")
+	before, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	other := filepath.Join(home, "elsewhere")
+	out.Reset()
+	if code := run(t, &out, "init", "--data-dir", other); code != 0 {
+		t.Fatalf("init --data-dir exit %d: %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "忽略") {
+		t.Fatalf("output should explain --data-dir is ignored, got %q", out.String())
+	}
+	if !strings.Contains(out.String(), "数据目录: "+filepath.Join(home, ".agent-memory")) {
+		t.Fatalf("should report the configured data dir, got %q", out.String())
+	}
+	after, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("config changed without --force:\nbefore=%q\nafter=%q", before, after)
+	}
+	if _, err := os.Stat(filepath.Join(other, "memory.db")); !os.IsNotExist(err) {
+		t.Fatalf("--data-dir must not create a database when config is kept: err=%v", err)
+	}
+
+	// --force 才真正应用 --data-dir
+	out.Reset()
+	if code := run(t, &out, "init", "--data-dir", other, "--force"); code != 0 {
+		t.Fatalf("init --force exit %d: %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "数据目录: "+other) {
+		t.Fatalf("--force should apply --data-dir, got %q", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(other, "memory.db")); err != nil {
+		t.Fatalf("--force should create the database at the new dir: %v", err)
+	}
+}
+
+func TestDoctor_IgnoresDriveRootKeyAsUnmerged(t *testing.T) {
+	home, _, _ := isolateHome(t)
+	var out bytes.Buffer
+	if code := run(t, &out, "init"); code != 0 {
+		t.Fatalf("init exit %d", code)
+	}
+
+	st, err := store.Open(filepath.Join(home, ".agent-memory", "memory.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	ctx := context.Background()
+	now := time.Now()
+	if _, err := st.EnsureProject(ctx, "f:", "f", "", "", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	out.Reset()
+	if code := run(t, &out, "doctor"); code != 0 {
+		t.Fatalf("doctor exit %d", code)
+	}
+	if strings.Contains(out.String(), "未合并项目") {
+		t.Fatalf("drive-root key must not be reported as unmerged:\n%s", out.String())
+	}
+
+	st, err = store.Open(filepath.Join(home, ".agent-memory", "memory.db"))
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	if _, err := st.EnsureProject(ctx, "trae:demo", "demo", "", "", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	out.Reset()
+	if code := run(t, &out, "doctor"); code != 0 {
+		t.Fatalf("doctor exit %d", code)
+	}
+	if !strings.Contains(out.String(), "  trae:demo") {
+		t.Fatalf("agent:slug key should still be reported:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "\n  f:\n") {
+		t.Fatalf("drive-root key must be filtered out:\n%s", out.String())
 	}
 }
 

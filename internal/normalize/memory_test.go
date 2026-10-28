@@ -52,6 +52,19 @@ func TestHashBytes_MatchesHashOfContent(t *testing.T) {
 	}
 }
 
+func TestDisplayText_PreservesFullWidthPunctuation(t *testing.T) {
+	const in = "注意：接口（v2）返回“蛇形”字段；重试 3 次，仍失败则告警！"
+	if got := DisplayText(in); got != in {
+		t.Fatalf("full-width punctuation damaged: got %q want %q", got, in)
+	}
+}
+
+func TestCanonicalText_FullWidthPunctuationStaysEquivalentToASCII(t *testing.T) {
+	if got, want := CanonicalText("注意：接口"), CanonicalText("注意:接口"); got != want {
+		t.Fatalf("canonical must still apply NFKC: got %q want %q", got, want)
+	}
+}
+
 func TestDisplayText_PreservesCaseButCleansLayout(t *testing.T) {
 	got := DisplayText("-  matchGoodsSku 与 /Home/User 路径\n")
 	want := "matchGoodsSku 与 /Home/User 路径"

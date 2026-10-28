@@ -19,6 +19,12 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	// 先校验 flag 再打开库：用法错误不能先输出半份报告。
+	d, err := time.ParseDuration(*changedSince)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: bad --since %q\n", *changedSince)
+		return 2
+	}
 
 	e, err := openEnv()
 	if err != nil {
@@ -50,11 +56,6 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "  qoder: 未发现（可在 config.toml 指定 [qoder] home）")
 	}
 
-	d, err := time.ParseDuration(*changedSince)
-	if err != nil {
-		fmt.Fprintf(stderr, "error: bad --since %q\n", *changedSince)
-		return 2
-	}
 	changed, err := e.st.ChangedSources(ctx, time.Now().Add(-d).Unix())
 	if err != nil {
 		return reportError(stderr, err)
@@ -77,10 +78,11 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	// 低置信项目用 "agent:slug" 当 key；排除含路径分隔符的项，
-	// 否则 Windows 的 "c:/..." 路径 key 会被全部误报为未合并。
+	// 低置信项目用 "agent:slug" 当 key；排除含路径分隔符的项与盘符根 key（f:），
+	// 否则 Windows 的 "c:/..." 路径 key 和 "f:" 会被误报为未合并。
 	unmerged, err := e.st.QueryStrings(ctx,
-		`SELECT key FROM project WHERE key LIKE '%:%' AND key NOT LIKE '%/%' ORDER BY key LIMIT 20`)
+		`SELECT key FROM project WHERE key LIKE '%:%' AND key NOT LIKE '%/%' AND key NOT LIKE '_:'
+ORDER BY key LIMIT 20`)
 	if err != nil {
 		return reportError(stderr, err)
 	}

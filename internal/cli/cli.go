@@ -88,6 +88,9 @@ func splitFlags(fs *flag.FlagSet, args []string) []string {
 		a := args[i]
 		if a == "--" {
 			positional = append(positional, args[i+1:]...)
+			// 把 "--" 本身交回 flag.Parse：只有它能终止 flag 解析，
+			// 否则 `memory add -- "-5% 阈值"` 里的 "-5%" 仍会被当成未定义 flag。
+			flags = append(flags, "--")
 			break
 		}
 		if a == "-" || !strings.HasPrefix(a, "-") {
