@@ -30,7 +30,7 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	port := fs.Int("port", 0, "监听端口，0 表示随机")
-	pollSeconds := fs.Int("poll", 30, "轮询兜底间隔秒数")
+	pollFlag := fs.Int("poll", 0, "轮询兜底间隔秒数，0 表示用配置 scan.interval")
 	debounce := fs.Duration("debounce", 2*time.Second, "事件去抖窗口")
 	noWatch := fs.Bool("no-watch", false, "只服务不扫描（调试用）")
 	if err := fs.Parse(args); err != nil {
@@ -66,7 +66,7 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 
 	adapters := buildAdapters(e.cfg)
 	if !*noWatch && len(adapters) > 0 {
-		go scanLoop(ctx, e.st, adapters, e.cfg, *debounce, *pollSeconds, stdout)
+		go scanLoop(ctx, e.st, adapters, e.cfg, *debounce, resolvePollSeconds(*pollFlag, e.cfg.Scan.Interval), stdout)
 	}
 
 	fmt.Fprintf(stdout, "serve on 127.0.0.1 (token: %s)\n", e.cfg.TokenPath())
@@ -75,6 +75,20 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		return reportError(stderr, err)
 	}
 	return 0
+}
+
+// resolvePollSeconds 把 --poll 解析成实际轮询间隔：0 表示跟随配置的 scan.interval。
+// 配置单位是 Duration，而 watcher 只接受秒；不足一秒按 1 秒处理，避免 0 被 watcher
+// 当成「没配置」再回落到它自己的 30 秒默认值。
+func resolvePollSeconds(flagValue int, interval time.Duration) int {
+	if flagValue > 0 {
+		return flagValue
+	}
+	seconds := int(interval / time.Second)
+	if seconds <= 0 {
+		seconds = 1
+	}
+	return seconds
 }
 
 // scanLoop 启动先扫一次，之后由监听事件驱动。扫描期间收到的事件靠 channel 合并成一次补扫。

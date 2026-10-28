@@ -44,7 +44,8 @@ func sqliteDSN(path string) string {
 
 func Open(path string) (*Store, error) {
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		// 数据目录里有记忆正文与令牌，只给当前用户。
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, fmt.Errorf("create data dir: %w", err)
 		}
 	}
@@ -105,7 +106,19 @@ func Open(path string) (*Store, error) {
 		}
 	}
 
+	secureDBFiles(path)
 	return &Store{db: db, path: path}, nil
+}
+
+// secureDBFiles 尽力把库文件收紧到 0600。-wal/-shm 可能尚未创建，Windows 上的
+// Chmod 也只映射只读位；权限收紧失败不该让服务起不来，因此一律忽略错误。
+func secureDBFiles(path string) {
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		if _, err := os.Stat(p); err != nil {
+			continue
+		}
+		_ = os.Chmod(p, 0o600)
+	}
 }
 
 // versionNewer 判断库里的版本是否高于当前程序。版本号按整数比较，

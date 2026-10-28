@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -54,6 +55,46 @@ func TestOpen_WALEnabled(t *testing.T) {
 	}
 	if mode != "wal" {
 		t.Fatalf("journal_mode = %q, want wal", mode)
+	}
+}
+
+// TestOpen_SecuresDataDirAndDBFiles 锁定数据目录与库文件的权限：
+// 目录 0700、库文件（含 -wal/-shm）0600。Windows 只映射只读位，POSIX 权限
+// 无法断言，因此那里只验证文件存在且 Chmod 的失败没有让 Open 报错。
+func TestOpen_SecuresDataDirAndDBFiles(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "data")
+	path := filepath.Join(dataDir, "memory.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	for _, p := range []string{dataDir, path} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("%s must exist after Open: %v", p, err)
+		}
+	}
+	if runtime.GOOS == "windows" {
+		// Windows 的文件模式不区分 0755/0700，只认只读位；能走到这里说明
+		// Open 没有被 Chmod 失败打断。
+		return
+	}
+
+	if info, err := os.Stat(dataDir); err != nil {
+		t.Fatal(err)
+	} else if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("data dir perm = %o, want 700", perm)
+	}
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		info, err := os.Stat(p)
+		if err != nil {
+			// WAL/SHM 可能尚未创建或已合并；存在才检查。
+			continue
+		}
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Fatalf("%s perm = %o, want 600", p, perm)
+		}
 	}
 }
 

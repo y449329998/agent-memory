@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/muyi99/agent-memory/internal/mcp"
 )
 
 func TestRun_UnknownCommandExit2(t *testing.T) {
@@ -37,6 +39,17 @@ func TestRun_VersionPrintsVersion(t *testing.T) {
 		if !strings.HasPrefix(stdout.String(), "agent-memory ") {
 			t.Fatalf("%v: stdout = %q, want prefix %q", args, stdout.String(), "agent-memory ")
 		}
+	}
+}
+
+// TestVersionMatchesMCP 锁定收尾版本：CLI 与 MCP serverInfo 必须是同一个版本号，
+// 否则客户端看到的两处信息互相矛盾。
+func TestVersionMatchesMCP(t *testing.T) {
+	if Version != "0.1.0" {
+		t.Fatalf("cli Version = %q, want 0.1.0", Version)
+	}
+	if mcp.ServerVersion != Version {
+		t.Fatalf("mcp ServerVersion = %q, cli Version = %q", mcp.ServerVersion, Version)
 	}
 }
 

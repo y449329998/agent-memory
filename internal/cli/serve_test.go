@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestServe_RefusesSecondInstance(t *testing.T) {
@@ -35,6 +36,25 @@ func TestServe_RefusesSecondInstance(t *testing.T) {
 	}
 	if !strings.Contains(body.String(), "已在运行") {
 		t.Fatalf("want 已在运行 message, got %q", body.String())
+	}
+}
+
+// TestResolvePollSeconds_UsesConfigWhenFlagOmitted 回归：--poll 的默认值不能写死 30，
+// 0 必须解释为「用配置里的 scan.interval」；显式正值仍然优先。
+func TestResolvePollSeconds_UsesConfigWhenFlagOmitted(t *testing.T) {
+	cases := []struct {
+		flag     int
+		interval time.Duration
+		want     int
+	}{
+		{0, 45 * time.Second, 45},
+		{0, 1500 * time.Millisecond, 1},
+		{7, 45 * time.Second, 7},
+	}
+	for _, tc := range cases {
+		if got := resolvePollSeconds(tc.flag, tc.interval); got != tc.want {
+			t.Fatalf("resolvePollSeconds(%d, %v) = %d, want %d", tc.flag, tc.interval, got, tc.want)
+		}
 	}
 }
 

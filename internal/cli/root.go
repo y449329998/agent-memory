@@ -6,7 +6,7 @@ import (
 	"sort"
 )
 
-const Version = "0.1.0-m1"
+const Version = "0.1.0"
 
 type command struct {
 	name string
