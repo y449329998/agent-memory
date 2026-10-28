@@ -20,24 +20,6 @@ func draft(agent, path, text string) domain.MemoryDraft {
 	}
 }
 
-// seedSource 只落一行 source 游标，供 stale 判定使用。
-// Task 10 才会引入 Store.PutSource（含 prev_hash / changed_at 语义），
-// 这里不提前实现生产代码，避免与那个任务的 TDD 步骤打架。
-func seedSource(t *testing.T, s *Store, st domain.SourceState, runAt int64) {
-	t.Helper()
-	_, err := s.db.Exec(`
-INSERT INTO source(agent, kind, path, content_hash, last_seen_run, updated_at)
-VALUES(?, ?, ?, ?, ?, ?)
-ON CONFLICT(agent, kind, path) DO UPDATE SET
-  content_hash  = excluded.content_hash,
-  last_seen_run = excluded.last_seen_run,
-  updated_at    = excluded.updated_at`,
-		st.Agent, st.Kind, st.Path, st.ContentHash, runAt, runAt)
-	if err != nil {
-		t.Fatalf("seed source %s:%s: %v", st.Agent, st.Path, err)
-	}
-}
-
 func TestUpsertMemory_DedupesAcrossAgentsAndKeepsBothSources(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()
@@ -178,17 +160,27 @@ func TestMarkStaleExcept_OnlyStalesItemsWhoseAgentSourcesDisappeared(t *testing.
 	if _, _, err := s.UpsertMemory(ctx, 0, draft("qoder", `/q/gone.md`, "只在消失文件里出现的条目"), run1); err != nil {
 		t.Fatal(err)
 	}
-	seedSource(t, s, domain.SourceState{Agent: "qoder", Kind: "memory", Path: "/q/a.md", ContentHash: "h1"}, run1.Unix())
-	seedSource(t, s, domain.SourceState{Agent: "qoder", Kind: "memory", Path: "/q/gone.md", ContentHash: "h2"}, run1.Unix())
+	for _, st := range []domain.SourceState{
+		{Agent: "qoder", Kind: "memory", Path: "/q/a.md", ContentHash: "h1"},
+		{Agent: "qoder", Kind: "memory", Path: "/q/gone.md", ContentHash: "h2"},
+	} {
+		if err := s.PutSource(ctx, st, run1.Unix()); err != nil {
+			t.Fatal(err)
+		}
+	}
 	// 另一 agent 单独支撑一条记忆，不应被 qoder 的扫描波及
 	other, _, err := s.UpsertMemory(ctx, 0, draft("trae", `/t/x.md`, "属于 trae 的条目"), run1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seedSource(t, s, domain.SourceState{Agent: "trae", Kind: "memory", Path: "/t/x.md", ContentHash: "h3"}, run1.Unix())
+	if err := s.PutSource(ctx, domain.SourceState{Agent: "trae", Kind: "memory", Path: "/t/x.md", ContentHash: "h3"}, run1.Unix()); err != nil {
+		t.Fatal(err)
+	}
 
 	// 第二次扫描：a.md 仍在，gone.md 不再出现
-	seedSource(t, s, domain.SourceState{Agent: "qoder", Kind: "memory", Path: "/q/a.md", ContentHash: "h1"}, run2.Unix())
+	if err := s.PutSource(ctx, domain.SourceState{Agent: "qoder", Kind: "memory", Path: "/q/a.md", ContentHash: "h1"}, run2.Unix()); err != nil {
+		t.Fatal(err)
+	}
 	staled, err := s.MarkStaleExcept(ctx, "qoder", run2.Unix())
 	if err != nil {
 		t.Fatal(err)
