@@ -21,8 +21,33 @@ type MemoryUnit struct {
 	Err     error
 }
 
+// SessionUnit 是一个会话源文件及其解析结果。
+type SessionUnit struct {
+	Path    string
+	Content []byte
+	MTime   time.Time
+	Size    int64
+	// Session 的 ProjectPath/ProjectSlug/Confidence 由适配器填；ProjectID 由 ingest 解析。
+	Session domain.Session
+	Events  []SessionEvent
+	Err     error
+}
+
+// SessionEvent 是适配器产出的会话事件，与 domain.SessionEvent 同构但不带 SessionID：
+// 库里的行主键由 store 决定，适配器不该关心。
+type SessionEvent struct {
+	Seq   int
+	Role  string
+	Kind  domain.EventKind
+	Text  string
+	Tool  string
+	Files []string
+	Ts    time.Time
+}
+
 // Adapter 把一个 agent 的原生记忆文件变成结构化草稿。只读，不写库，不认识其他 agent。
 type Adapter interface {
 	Name() string
 	ScanMemoryUnits(ctx context.Context) ([]MemoryUnit, error)
+	ScanSessionUnits(ctx context.Context) ([]SessionUnit, error)
 }

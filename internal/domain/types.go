@@ -130,3 +130,73 @@ type Stats struct {
 	MemoriesByAgent map[string]int
 	MemoriesByType  map[string]int
 }
+
+// Session 是一个已入库的会话。ProjectPath/ProjectSlug/Confidence 由适配器给出，
+// ProjectID 由 ingest 解析后回填。
+type Session struct {
+	ID          int64
+	Agent       string
+	ExternalID  string
+	ProjectID   int64
+	Title       string
+	StartedAt   time.Time
+	UpdatedAt   time.Time
+	EventCount  int
+	Path        string
+	ProjectPath string
+	ProjectSlug string
+	Confidence  string
+}
+
+type EventKind string
+
+const (
+	KindUserText    EventKind = "user_text"
+	KindAssistant   EventKind = "assistant_text"
+	KindToolEdit    EventKind = "tool_edit"
+	KindToolCommand EventKind = "tool_command"
+	KindToolRead    EventKind = "tool_read"
+	KindToolError   EventKind = "tool_error"
+	KindWorkspace   EventKind = "workspace"
+	KindOther       EventKind = "other"
+)
+
+// SessionEvent 是会话里按 Seq 排序的一条事件。
+type SessionEvent struct {
+	ID        int64
+	SessionID int64
+	Seq       int
+	Role      string
+	Kind      EventKind
+	Text      string
+	Tool      string
+	Files     []string
+	Ts        time.Time
+}
+
+// TaskCard 是从会话里提炼出的任务卡，供后续会话接力。
+type TaskCard struct {
+	ID            int64
+	SessionID     int64
+	ProjectID     int64
+	Goal          string
+	Status        string
+	Decisions     []string
+	Files         []string
+	Commands      []string
+	Errors        []string
+	OpenQuestions string
+	NextSteps     string
+	Confidence    string
+	GeneratedBy   string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+// 任务卡状态。
+const (
+	StatusDoing   = "doing"
+	StatusDone    = "done"
+	StatusBlocked = "blocked"
+	StatusUnknown = "unknown"
+)

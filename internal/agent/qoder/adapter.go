@@ -19,6 +19,11 @@ func New(home string) *Adapter { return &Adapter{Home: home} }
 
 func (a *Adapter) Name() string { return "qoder" }
 
+// ScanSessionUnits 目前是占位实现，Task 18 会替换为真实的会话 JSONL 解析。
+func (a *Adapter) ScanSessionUnits(ctx context.Context) ([]agent.SessionUnit, error) {
+	return nil, nil
+}
+
 func (a *Adapter) ScanMemoryUnits(ctx context.Context) ([]agent.MemoryUnit, error) {
 	var units []agent.MemoryUnit
 

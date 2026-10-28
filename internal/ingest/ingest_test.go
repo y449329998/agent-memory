@@ -231,6 +231,10 @@ func (a faultyAdapter) ScanMemoryUnits(ctx context.Context) ([]agent.MemoryUnit,
 	return append(units, agent.MemoryUnit{Path: a.path, Err: errors.New("read: boom")}), err
 }
 
+func (a faultyAdapter) ScanSessionUnits(ctx context.Context) ([]agent.SessionUnit, error) {
+	return a.inner.ScanSessionUnits(ctx)
+}
+
 func TestRun_RecordsSourceErrorAndKeepsOthers(t *testing.T) {
 	home, _, _ := fakeQoder(t)
 	bad := filepath.Join(home, "projects", "RA", "memory", "bad.md")
@@ -269,6 +273,10 @@ func (badDraftAdapter) ScanMemoryUnits(ctx context.Context) ([]agent.MemoryUnit,
 			SourcePath:  path,
 		}},
 	}}, nil
+}
+
+func (badDraftAdapter) ScanSessionUnits(ctx context.Context) ([]agent.SessionUnit, error) {
+	return nil, nil
 }
 
 func TestRun_DraftFailureDoesNotAdvanceSourceHash(t *testing.T) {
