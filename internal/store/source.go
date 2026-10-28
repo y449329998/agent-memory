@@ -178,6 +178,24 @@ WHERE last_error <> '' ORDER BY updated_at DESC LIMIT 200`)
 	return out, rows.Err()
 }
 
+// ResetSources 清空某个 agent 的全部扫描游标，用于 `scan --full`。
+// 只删 source 行：记忆条目留在库里，重放时按哈希门控重新走一遍 upsert。
+// agent 为空表示所有 agent。
+func (s *Store) ResetSources(ctx context.Context, agent string) (int, error) {
+	q := `DELETE FROM source`
+	args := []any{}
+	if agent != "" {
+		q += ` WHERE agent = ?`
+		args = append(args, agent)
+	}
+	res, err := s.db.ExecContext(ctx, q, args...)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
 // Stats 汇总库内规模与分布，供 memory stats / doctor 展示。
 // 连接数为 1：每个 rows 都读尽并关闭后再发下一个查询。
 func (s *Store) Stats(ctx context.Context) (domain.Stats, error) {

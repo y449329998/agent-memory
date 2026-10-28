@@ -114,6 +114,32 @@ func TestMarkSourceError_KeepsPreviousHash(t *testing.T) {
 	}
 }
 
+func TestResetSources_ClearsHashGateForFullScan(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	run := time.Unix(1700000000, 0).Unix()
+	if err := s.PutSource(ctx, domain.SourceState{Agent: "qoder", Kind: "memory", Path: "/q/a.md", ContentHash: "h1"}, run); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutSource(ctx, domain.SourceState{Agent: "qoder", Kind: "session", Path: "/q/s.jsonl", ContentHash: "h2"}, run); err != nil {
+		t.Fatal(err)
+	}
+	n, err := s.ResetSources(ctx, "qoder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("reset %d rows, want 2", n)
+	}
+	if _, ok, err := s.SourceHash(ctx, "qoder", "memory", "/q/a.md"); err != nil || ok {
+		t.Fatalf("source row should be gone: ok=%v err=%v", ok, err)
+	}
+	// 记忆条目本身不受影响：full 扫描是重放，不是重置内容
+	if _, _, err := s.UpsertMemory(ctx, 0, domain.MemoryDraft{Scope: domain.ScopeUser, Type: domain.TypeFact, Text: "x", SourceAgent: "qoder", SourcePath: "/q/a.md"}, time.Unix(run, 0)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestStats_CountsAndGroupings(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()
