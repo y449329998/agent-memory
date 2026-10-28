@@ -66,6 +66,16 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "  %s\n", e.cfg.DataDir)
 	fmt.Fprintf(stdout, "  %s\n", e.cfg.DBPath())
 	fmt.Fprintf(stdout, "  项目内 .agent-memory/ 与 link 装过的区块（M2/M3 起）\n")
+	links, err := e.st.ListAgentLinks(ctx)
+	if err != nil {
+		return reportError(stderr, err)
+	}
+	for _, l := range links {
+		fmt.Fprintf(stdout, "  %s 区块 -> %s (登记于 %s)\n", l.Agent, l.BlockFile, l.InstalledAt.Format(time.RFC3339))
+	}
+	if len(links) == 0 {
+		fmt.Fprintln(stdout, "  （尚无 link 登记）")
+	}
 
 	fmt.Fprintf(stdout, "\nagent 发现结果:\n")
 	if home := e.cfg.QoderHome(); home != "" {

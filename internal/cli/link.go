@@ -1,13 +1,17 @@
 package cli
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/muyi99/agent-memory/internal/daemon"
+	"github.com/muyi99/agent-memory/internal/normalize"
+	"github.com/muyi99/agent-memory/internal/store"
 	"github.com/muyi99/agent-memory/internal/surface"
 )
 
@@ -80,6 +84,27 @@ func cmdLink(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "MCP 配置: %s\n上下文区块: %s (%s)\n", mcpState, blockState, report.BlockFile)
 	fmt.Fprintln(stdout, "重启该 agent 后，新会话会自动读到 HANDOFF.md")
+
+	// 登记是尽力而为：配置与区块已经落盘，登记失败只能提示，不能回滚成功的那部分。
+	ctx := context.Background()
+	st, err := store.Open(e.cfg.DBPath())
+	if err != nil {
+		fmt.Fprintf(stderr, "warn: 项目未登记进库: %v\n", err)
+		return 0
+	}
+	defer st.Close()
+	projectID, ok, err := st.ResolveProjectByPath(ctx, opts.ProjectDir)
+	if err == nil && !ok {
+		// 新项目先 link 再 scan 也是合法顺序：库里没有映射时按路径建。
+		projectID, _, err = st.ProjectIDForPath(ctx, target, "", opts.ProjectDir, "", time.Now())
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "warn: 项目未登记进库: %v\n", err)
+		return 0
+	}
+	if err := st.RecordAgentLink(ctx, projectID, target, report.BlockFile, contentHashOf(report.BlockFile), time.Now()); err != nil {
+		fmt.Fprintf(stderr, "warn: agent_link 登记失败: %v\n", err)
+	}
 	return 0
 }
 
@@ -112,7 +137,40 @@ func cmdUnlink(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(stdout, "MCP 配置回滚: %v\n上下文区块移除: %v\n", report.MCPChanged, report.BlockAdded)
+
+	// 撤销登记同样尽力而为：配置与区块已经回滚，库里的残行最多让 doctor 多列一行。
+	// 库不存在就没有可撤销的登记，也不该为了撤销顺手建一个空库。
+	if _, statErr := os.Stat(e.cfg.DBPath()); statErr != nil {
+		return 0
+	}
+	ctx := context.Background()
+	st, err := store.Open(e.cfg.DBPath())
+	if err != nil {
+		fmt.Fprintf(stderr, "warn: agent_link 撤销失败: %v\n", err)
+		return 0
+	}
+	defer st.Close()
+	id, ok, err := st.ResolveProjectByPath(ctx, opts.ProjectDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "warn: agent_link 撤销失败: %v\n", err)
+		return 0
+	}
+	if ok {
+		if _, err := st.ClearAgentLink(ctx, id, fs.Arg(0)); err != nil {
+			fmt.Fprintf(stderr, "warn: agent_link 撤销失败: %v\n", err)
+		}
+	}
 	return 0
+}
+
+// contentHashOf 算区块文件的当前内容哈希。读不到就返回空串：
+// 登记仍要写（doctor 至少能列出目标），哈希只用于判断区块是否被外部改过。
+func contentHashOf(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return normalize.HashBytes(data)
 }
 
 // linkOptions 组装 link/unlink 的输入。
