@@ -3,11 +3,23 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/muyi99/agent-memory/internal/domain"
 )
+
+// rowCount 用通用原语跑一条测试专用聚合 SQL，不为统计单独在生产代码里加方法。
+func rowCount(t *testing.T, s *Store, q string, args ...any) int {
+	t.Helper()
+	n, err := s.QueryInt(context.Background(), q, args...)
+	if err != nil {
+		t.Fatalf("%s: %v", q, err)
+	}
+	return n
+}
 
 func draft(agent, path, text string) domain.MemoryDraft {
 	return domain.MemoryDraft{
@@ -146,78 +158,223 @@ func TestUpsertMemory_WritesSegmentedFTSRow(t *testing.T) {
 	}
 }
 
-func TestMarkStaleExcept_OnlyStalesItemsWhoseAgentSourcesDisappeared(t *testing.T) {
+// assertStale 是三个 stale 场景共用的断言：直接查库，避免依赖 MemoryByID 的额外查询。
+func assertStale(t *testing.T, s *Store, id int64, want bool) {
+	t.Helper()
+	got := rowCount(t, s, `SELECT stale FROM memory_item WHERE id = ?`, id) != 0
+	if got != want {
+		t.Fatalf("memory %d stale=%v want %v", id, got, want)
+	}
+}
+
+// TestMarkStaleForRun_StalesSingleSourceItemThatDisappeared 场景一：
+// 条目只有一个来源且本轮没再见到 → 过时；其他 agent 的条目不受波及。
+func TestMarkStaleForRun_StalesSingleSourceItemThatDisappeared(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()
 	run1 := time.Unix(1700000000, 0)
 	run2 := run1.Add(time.Hour)
 
-	// qoder 的一条记忆，来自两个源文件
 	kept, _, err := s.UpsertMemory(ctx, 0, draft("qoder", `/q/a.md`, "保持存在的条目"), run1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.UpsertMemory(ctx, 0, draft("qoder", `/q/gone.md`, "只在消失文件里出现的条目"), run1); err != nil {
+	gone, _, err := s.UpsertMemory(ctx, 0, draft("qoder", `/q/gone.md`, "只在消失文件里出现的条目"), run1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _, err := s.UpsertMemory(ctx, 0, draft("trae", `/t/x.md`, "属于 trae 的条目"), run1)
+	if err != nil {
 		t.Fatal(err)
 	}
 	for _, st := range []domain.SourceState{
 		{Agent: "qoder", Kind: "memory", Path: "/q/a.md", ContentHash: "h1"},
 		{Agent: "qoder", Kind: "memory", Path: "/q/gone.md", ContentHash: "h2"},
+		{Agent: "trae", Kind: "memory", Path: "/t/x.md", ContentHash: "h3"},
 	} {
 		if err := s.PutSource(ctx, st, run1.Unix()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// 另一 agent 单独支撑一条记忆，不应被 qoder 的扫描波及
-	other, _, err := s.UpsertMemory(ctx, 0, draft("trae", `/t/x.md`, "属于 trae 的条目"), run1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.PutSource(ctx, domain.SourceState{Agent: "trae", Kind: "memory", Path: "/t/x.md", ContentHash: "h3"}, run1.Unix()); err != nil {
-		t.Fatal(err)
-	}
-
-	// 第二次扫描：a.md 仍在，gone.md 不再出现
+	// 第二轮只见到 a.md
 	if err := s.PutSource(ctx, domain.SourceState{Agent: "qoder", Kind: "memory", Path: "/q/a.md", ContentHash: "h1"}, run2.Unix()); err != nil {
 		t.Fatal(err)
 	}
-	staled, err := s.MarkStaleExcept(ctx, "qoder", run2.Unix())
+	staled, err := s.MarkStaleForRun(ctx, []string{"qoder"}, run2.Unix())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if staled != 1 {
 		t.Fatalf("want 1 staled, got %d", staled)
 	}
-
-	assertStale := func(id int64, want bool) {
-		t.Helper()
-		item, err := s.MemoryByID(ctx, id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if item.Stale != want {
-			t.Fatalf("memory %d stale=%v want %v (%s)", id, item.Stale, want, item.Text)
-		}
-	}
-	assertStale(kept, false)
-	assertStale(other, false)
-
-	gone, err := s.db.Query(`SELECT id FROM memory_item WHERE text = '只在消失文件里出现的条目'`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var goneID int64
-	for gone.Next() {
-		gone.Scan(&goneID)
-	}
-	gone.Close()
-	assertStale(goneID, true)
+	assertStale(t, s, kept, false)
+	assertStale(t, s, other, false)
+	assertStale(t, s, gone, true)
 
 	// 重新出现应撤销 stale
 	if _, created, err := s.UpsertMemory(ctx, 0, draft("qoder", `/q/gone.md`, "只在消失文件里出现的条目"), run2); err != nil || created {
 		t.Fatalf("reappear should merge, created=%v err=%v", created, err)
 	}
-	assertStale(goneID, false)
+	assertStale(t, s, gone, false)
+}
+
+// TestMarkStaleForRun_KeepsItemWhenAnotherSourceOfSameAgentWasSeen 场景二：
+// 同一 agent 的两个源支撑同一条目，只有一个源本轮见过 → 保持新鲜。
+func TestMarkStaleForRun_KeepsItemWhenAnotherSourceOfSameAgentWasSeen(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	run1 := time.Unix(1700000000, 0)
+	run2 := run1.Add(time.Hour)
+
+	id, _, err := s.UpsertMemory(ctx, 0, draft("qoder", `/q/a.md`, "两个文件都写了的条目"), run1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged, created, err := s.UpsertMemory(ctx, 0, draft("qoder", `/q/b.md`, "两个文件都写了的条目"), run1); err != nil || created || merged != id {
+		t.Fatalf("same agent second source should merge: id=%d created=%v err=%v", merged, created, err)
+	}
+	for _, p := range []string{"/q/a.md", "/q/b.md"} {
+		if err := s.PutSource(ctx, domain.SourceState{Agent: "qoder", Kind: "memory", Path: p, ContentHash: "h"}, run1.Unix()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// b.md 消失，只剩 a.md 露面
+	if err := s.PutSource(ctx, domain.SourceState{Agent: "qoder", Kind: "memory", Path: "/q/a.md", ContentHash: "h"}, run2.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	staled, err := s.MarkStaleForRun(ctx, []string{"qoder"}, run2.Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if staled != 0 {
+		t.Fatalf("want 0 staled while one source still seen, got %d", staled)
+	}
+	assertStale(t, s, id, false)
+}
+
+// TestMarkStaleForRun_LeavesSharedItemAloneWhenUnscannedAgentStillSupports 场景三：
+// 跨 agent 共同支撑的条目，只扫了一个 agent（且它的文件消失）时不能被判过时；
+// 来源全属于未扫描 agent 的条目同样不动。
+func TestMarkStaleForRun_LeavesSharedItemAloneWhenUnscannedAgentStillSupports(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	run1 := time.Unix(1700000000, 0)
+	run2 := run1.Add(time.Hour)
+
+	shared, _, err := s.UpsertMemory(ctx, 0, draft("qoder", `/q/a.md`, "两个 agent 都记着的条目"), run1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged, created, err := s.UpsertMemory(ctx, 0, draft("trae", `/t/a.md`, "两个 agent 都记着的条目"), run1); err != nil || created || merged != shared {
+		t.Fatalf("cross-agent same text should merge: id=%d created=%v err=%v", merged, created, err)
+	}
+	traeOnly, _, err := s.UpsertMemory(ctx, 0, draft("trae", `/t/b.md`, "只属于 trae 的条目"), run1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	qoderSeen, _, err := s.UpsertMemory(ctx, 0, draft("qoder", `/q/seen.md`, "本轮仍然存在的条目"), run1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	qoderGone, _, err := s.UpsertMemory(ctx, 0, draft("qoder", `/q/gone.md`, "qoder 独有且已消失的条目"), run1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range []domain.SourceState{
+		{Agent: "qoder", Kind: "memory", Path: "/q/a.md", ContentHash: "h1"},
+		{Agent: "trae", Kind: "memory", Path: "/t/a.md", ContentHash: "h2"},
+		{Agent: "trae", Kind: "memory", Path: "/t/b.md", ContentHash: "h3"},
+		{Agent: "qoder", Kind: "memory", Path: "/q/seen.md", ContentHash: "h4"},
+		{Agent: "qoder", Kind: "memory", Path: "/q/gone.md", ContentHash: "h5"},
+	} {
+		if err := s.PutSource(ctx, st, run1.Unix()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 只扫 qoder：seen.md 露面，a.md 消失，trae 的两个源完全没被扫过
+	if err := s.PutSource(ctx, domain.SourceState{Agent: "qoder", Kind: "memory", Path: "/q/seen.md", ContentHash: "h4"}, run2.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	staled, err := s.MarkStaleForRun(ctx, []string{"qoder"}, run2.Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if staled != 1 {
+		t.Fatalf("want only the qoder-only disappeared item staled, got %d", staled)
+	}
+	assertStale(t, s, shared, false)
+	assertStale(t, s, traeOnly, false)
+	assertStale(t, s, qoderSeen, false)
+	assertStale(t, s, qoderGone, true)
+
+	// 两个 agent 都扫、且 trae 仍见到 a.md：共同支撑的条目依然新鲜
+	for _, p := range []string{"/t/a.md", "/t/b.md"} {
+		if err := s.PutSource(ctx, domain.SourceState{Agent: "trae", Kind: "memory", Path: p, ContentHash: "h2"}, run2.Unix()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	staled, err = s.MarkStaleForRun(ctx, []string{"qoder", "trae"}, run2.Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if staled != 0 {
+		t.Fatalf("want 0 staled when trae still supports the shared item, got %d", staled)
+	}
+	assertStale(t, s, shared, false)
+
+	// agents 为空时什么也不做
+	if staled, err := s.MarkStaleForRun(ctx, nil, run2.Unix()); err != nil || staled != 0 {
+		t.Fatalf("empty agents: staled=%d err=%v", staled, err)
+	}
+}
+
+// TestUpsertMemory_ConcurrentSameTextMergesWithoutError 锁住 UpsertMemory 的原子性：
+// SELECT → INSERT → FTS → source 四步必须在同一事务里，否则并发同文本会撞唯一索引。
+// 单连接下并发天然串行，断言只依赖最终状态，不依赖时序。
+func TestUpsertMemory_ConcurrentSameTextMergesWithoutError(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0)
+	const n = 8
+
+	var wg sync.WaitGroup
+	ids := make([]int64, n)
+	created := make([]bool, n)
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ids[i], created[i], errs[i] = s.UpsertMemory(ctx, 0,
+				draft(fmt.Sprintf("agent%d", i), fmt.Sprintf("/m/%d.md", i), "并发写入的同一条文本"), now)
+		}(i)
+	}
+	wg.Wait()
+
+	winners := 0
+	for i := 0; i < n; i++ {
+		if errs[i] != nil {
+			t.Fatalf("goroutine %d: %v", i, errs[i])
+		}
+		if ids[i] != ids[0] {
+			t.Fatalf("goroutine %d got id %d, want %d", i, ids[i], ids[0])
+		}
+		if created[i] {
+			winners++
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("exactly one upsert should create the row, got %d", winners)
+	}
+	if got := rowCount(t, s, `SELECT count(*) FROM memory_item`); got != 1 {
+		t.Fatalf("memory_item = %d, want 1", got)
+	}
+	if got := rowCount(t, s, `SELECT count(*) FROM memory_source WHERE memory_id = ?`, ids[0]); got != n {
+		t.Fatalf("memory_source = %d, want %d", got, n)
+	}
+	if got := rowCount(t, s, `SELECT count(*) FROM memory_fts WHERE rowid = ?`, ids[0]); got != 1 {
+		t.Fatalf("memory_fts = %d, want 1", got)
+	}
 }
 
 func TestPurgeStale_RemovesFTSRowAndSources(t *testing.T) {

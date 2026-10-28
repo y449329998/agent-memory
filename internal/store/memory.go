@@ -21,6 +21,9 @@ import (
 // 入库文本、text_norm_hash 与 FTS 行三者同源：text 用不做小写的 DisplayText 保留
 // 标识符与路径的可读大小写，text_norm_hash 与 FTS 仍由小写化的 canon 派生，
 // 所以大小写不同的两条照样合并、照样都能被检索命中。
+//
+// 四步（查询 / 插入 / FTS / 来源）在同一事务里：扫描与 MCP 写入并发时语句会交错，
+// 非原子执行要么撞唯一索引，要么在 FTS 失败后留下检索不到的条目。
 func (s *Store) UpsertMemory(ctx context.Context, projectID int64, d domain.MemoryDraft, at time.Time) (int64, bool, error) {
 	canon := normalize.CanonicalText(d.Text)
 	if canon == "" {
@@ -38,15 +41,21 @@ func (s *Store) UpsertMemory(ctx context.Context, projectID int64, d domain.Memo
 		typ = string(domain.TypeFact)
 	}
 
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, false, err
+	}
+	defer tx.Rollback()
+
 	var id int64
-	err := s.db.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 SELECT id FROM memory_item
 WHERE scope = ? AND project_id = ? AND type = ? AND text_norm_hash = ?`,
 		scope, projectID, typ, hash).Scan(&id)
 
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		res, err := s.db.ExecContext(ctx, `
+		res, err := tx.ExecContext(ctx, `
 INSERT INTO memory_item(scope, project_id, type, text, text_norm_hash, stale, first_seen_at, last_seen_at)
 VALUES(?, ?, ?, ?, ?, 0, ?, ?)`,
 			scope, projectID, typ, display, hash, now, now)
@@ -57,23 +66,29 @@ VALUES(?, ?, ?, ?, ?, 0, ?, ?)`,
 		if err != nil {
 			return 0, false, err
 		}
-		if _, err := s.db.ExecContext(ctx,
+		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO memory_fts(rowid, text_seg) VALUES(?, ?)`,
 			id, strings.Join(normalize.Segment(canon), " ")); err != nil {
 			return 0, false, fmt.Errorf("index memory %d: %w", id, err)
 		}
-		if err := s.addSource(ctx, id, d); err != nil {
+		if err := addSource(ctx, tx, id, d); err != nil {
+			return 0, false, err
+		}
+		if err := tx.Commit(); err != nil {
 			return 0, false, err
 		}
 		return id, true, nil
 	case err != nil:
 		return 0, false, err
 	default:
-		if _, err := s.db.ExecContext(ctx,
+		if _, err := tx.ExecContext(ctx,
 			`UPDATE memory_item SET last_seen_at = ?, stale = 0 WHERE id = ?`, now, id); err != nil {
 			return 0, false, err
 		}
-		if err := s.addSource(ctx, id, d); err != nil {
+		if err := addSource(ctx, tx, id, d); err != nil {
+			return 0, false, err
+		}
+		if err := tx.Commit(); err != nil {
 			return 0, false, err
 		}
 		return id, false, nil
@@ -81,13 +96,13 @@ VALUES(?, ?, ?, ?, ?, 0, ?, ?)`,
 }
 
 // addSource 幂等登记来源：同一 (memory_id, agent, path) 只保留一行，
-// 重复见到时刷新 quote 而不是插入重复来源。
-func (s *Store) addSource(ctx context.Context, memoryID int64, d domain.MemoryDraft) error {
+// 重复见到时刷新 quote 而不是插入重复来源。必须与 UpsertMemory 同事务。
+func addSource(ctx context.Context, tx *sql.Tx, memoryID int64, d domain.MemoryDraft) error {
 	agent := d.SourceAgent
 	if agent == "" {
 		agent = "mcp"
 	}
-	_, err := s.db.ExecContext(ctx, `
+	_, err := tx.ExecContext(ctx, `
 INSERT INTO memory_source(memory_id, agent, path, quote)
 VALUES(?, ?, ?, ?)
 ON CONFLICT(memory_id, agent, path) DO UPDATE SET quote = excluded.quote`,
@@ -217,20 +232,35 @@ func (s *Store) ListMemories(ctx context.Context, projectID int64, includeStale 
 	return out, nil
 }
 
-// MarkStaleExcept 把该 agent 本轮没有再见到的记忆置为过时。
-// 只在该 agent 支撑过的条目里判定：别的 agent 或 MCP 写入的条目不受影响。
+// MarkStaleForRun 把「所有支撑来源都属于本轮扫过的 agent、且本轮一条都没再见到」的条目置为过时。
+// 共同支撑的条目只要有一个来源本轮见过就保持新鲜；来源属于未扫描 agent 的条目一律不动——
+// 那些 agent 这一轮根本没看，不能把「没看」当成「不见了」。
 // 不硬删——agent 重写记忆文件时常常只是换措辞，直接删会把结论抹掉。
-func (s *Store) MarkStaleExcept(ctx context.Context, agent string, runAt int64) (int, error) {
+func (s *Store) MarkStaleForRun(ctx context.Context, agents []string, runAt int64) (int, error) {
+	if len(agents) == 0 {
+		return 0, nil
+	}
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(agents)), ",")
+	args := make([]any, 0, 3*len(agents)+1)
+	for i := 0; i < 3; i++ {
+		for _, a := range agents {
+			args = append(args, a)
+		}
+	}
+	args = append(args, runAt)
+
 	res, err := s.db.ExecContext(ctx, `
 UPDATE memory_item SET stale = 1
 WHERE stale = 0
-  AND id IN (SELECT memory_id FROM memory_source WHERE agent = ?)
-  AND id NOT IN (
-    SELECT ms.memory_id
-    FROM memory_source ms
+  AND id IN (SELECT memory_id FROM memory_source WHERE agent IN (`+ph+`))
+  AND NOT EXISTS (
+    SELECT 1 FROM memory_source ms
+    WHERE ms.memory_id = memory_item.id AND ms.agent NOT IN (`+ph+`))
+  AND NOT EXISTS (
+    SELECT 1 FROM memory_source ms
     JOIN source s ON s.agent = ms.agent AND s.path = ms.path
-    WHERE ms.agent = ? AND s.last_seen_run = ?
-  )`, agent, agent, runAt)
+    WHERE ms.memory_id = memory_item.id AND ms.agent IN (`+ph+`) AND s.last_seen_run = ?)`,
+		args...)
 	if err != nil {
 		return 0, err
 	}
