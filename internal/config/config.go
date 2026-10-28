@@ -19,9 +19,10 @@ const (
 )
 
 type Config struct {
-	DataDir string      `toml:"data_dir"`
-	Qoder   QoderConfig `toml:"qoder"`
-	Scan    ScanConfig  `toml:"scan"`
+	DataDir string        `toml:"data_dir"`
+	Qoder   QoderConfig   `toml:"qoder"`
+	Scan    ScanConfig    `toml:"scan"`
+	Handoff HandoffConfig `toml:"handoff"`
 }
 
 type QoderConfig struct {
@@ -34,6 +35,13 @@ type ScanConfig struct {
 	MemoryListSize int           `toml:"memory_list_size"`
 }
 
+// HandoffConfig 控制交接简报的口径：预算、带几张任务卡、会话多久算写完。
+type HandoffConfig struct {
+	BudgetTokens int           `toml:"budget_tokens"`
+	RecentCards  int           `toml:"recent_cards"`
+	SettleIdle   time.Duration `toml:"settle_idle"`
+}
+
 // Default 以 userHome 为基准生成缺省值。把 home 作为参数传进来，
 // 这样测试不需要改环境变量。
 func Default(userHome string) Config {
@@ -41,6 +49,7 @@ func Default(userHome string) Config {
 		DataDir: filepath.Join(userHome, dirName),
 		Qoder:   QoderConfig{},
 		Scan:    ScanConfig{Interval: defaultInterval, MemoryListSize: defaultMemLimit},
+		Handoff: HandoffConfig{BudgetTokens: 1500, RecentCards: 3, SettleIdle: 5 * time.Minute},
 	}
 }
 
@@ -115,6 +124,15 @@ func Load(path, userHome string) (Config, error) {
 	}
 	if c.Scan.MemoryListSize <= 0 {
 		c.Scan.MemoryListSize = defaultMemLimit
+	}
+	if c.Handoff.BudgetTokens <= 0 {
+		c.Handoff.BudgetTokens = Default(userHome).Handoff.BudgetTokens
+	}
+	if c.Handoff.RecentCards <= 0 {
+		c.Handoff.RecentCards = Default(userHome).Handoff.RecentCards
+	}
+	if c.Handoff.SettleIdle <= 0 {
+		c.Handoff.SettleIdle = Default(userHome).Handoff.SettleIdle
 	}
 	return c, nil
 }

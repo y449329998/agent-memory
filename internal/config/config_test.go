@@ -101,6 +101,7 @@ func TestSaveThenLoad_RoundTrips(t *testing.T) {
 	c := Default("/fake/home")
 	c.DataDir = "/tmp/mydata"
 	c.Scan.Interval = 45 * time.Second
+	c.Handoff.SettleIdle = 90 * time.Second
 	if err := Save(path, c); err != nil {
 		t.Fatal(err)
 	}
@@ -110,6 +111,46 @@ func TestSaveThenLoad_RoundTrips(t *testing.T) {
 	}
 	if got.DataDir != "/tmp/mydata" || got.Scan.Interval != 45*time.Second {
 		t.Fatalf("round trip lost values: %+v", got)
+	}
+	if got.Handoff.SettleIdle != 90*time.Second {
+		t.Fatalf("round trip lost handoff settle idle: %v", got.Handoff.SettleIdle)
+	}
+	if got.Handoff.BudgetTokens != 1500 || got.Handoff.RecentCards != 3 {
+		t.Fatalf("round trip lost handoff defaults: %+v", got.Handoff)
+	}
+}
+
+func TestDefault_HandoffSection(t *testing.T) {
+	c := Default(t.TempDir())
+	if c.Handoff.BudgetTokens != 1500 {
+		t.Fatalf("budget = %d, want 1500", c.Handoff.BudgetTokens)
+	}
+	if c.Handoff.RecentCards != 3 {
+		t.Fatalf("recent cards = %d, want 3", c.Handoff.RecentCards)
+	}
+	if c.Handoff.SettleIdle != 5*time.Minute {
+		t.Fatalf("settle idle = %v, want 5m", c.Handoff.SettleIdle)
+	}
+}
+
+func TestLoad_HandoffOverridesWithZeroGuards(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	body := "[handoff]\nbudget_tokens = 800\nrecent_cards = 0\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path, "/fake/home")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Handoff.BudgetTokens != 800 {
+		t.Fatalf("budget = %d", c.Handoff.BudgetTokens)
+	}
+	if c.Handoff.RecentCards != 3 {
+		t.Fatalf("zero recent_cards should fall back to default, got %d", c.Handoff.RecentCards)
+	}
+	if c.Handoff.SettleIdle != 5*time.Minute {
+		t.Fatalf("unset settle_idle should fall back to default, got %v", c.Handoff.SettleIdle)
 	}
 }
 
