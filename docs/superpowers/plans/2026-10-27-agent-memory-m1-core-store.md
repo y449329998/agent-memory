@@ -1635,6 +1635,8 @@ git commit -m "feat: 项目身份与跨 agent 路径映射仓储"
 
 ## Task 8: 记忆条目 upsert、去重与 stale
 
+> **实施修正**：本任务的 `MarkStaleExcept`、以及「`text` 存 CanonicalText」两处已在后续任务被替换——前者由 Task 13 的 `MarkStaleForRun` 取代（跨 agent 保护），后者改为 `text` 存 `DisplayText`（保留大小写与全角标点）、只让哈希与分词用 `CanonicalText`。以代码为准。
+
 去重键是 `(scope, project_id, type, text_norm_hash)`；FTS 行与条目同 id（`memory_fts.rowid = memory_item.id`），所以更新文本时必须先删后插——本期文本不可变，只处理插入与删除。
 
 **Files:**
