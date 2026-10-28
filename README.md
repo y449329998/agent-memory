@@ -44,6 +44,25 @@ M1 接入 Qoder 的记忆文件；M2 起再导入它的会话历史，提炼任�
 
 Trae 与 WorkBuddy 的 MCP 配置格式未确证，`link` 拒绝写入；它们照常通过项目里的 `.agent-memory/HANDOFF.md` 读到共享记忆。
 
+## Web UI
+
+`serve` 自带一个本地单页，不需要额外安装：
+
+```
+http://127.0.0.1:<端口>/?token=<~/.agent-memory/token 里的值>
+```
+
+打开后 token 会存进 `sessionStorage` 并从地址栏抹掉。页面提供：
+
+- 概览（项目/记忆/过时/源/失败源）与健康状态
+- 搜索记忆（中文两字词可命中，可按类型与项目过滤，可勾选包含过时）
+- 记忆管理：新增（用户级/项目级）、标过时、复活
+- 任务卡列表（目标 / 状态 / 下一步 / 改动文件）
+- 交接简报：预览与「写入 HANDOFF.md」
+- 一键触发 `scan`
+
+页面没有任何外部依赖（无 CDN、无字体库），所有动态内容用 `textContent` 插入；写接口除 Bearer 外还校验 `Origin` 必须是本机同端口。
+
 ## 安装
 
     go build ./cmd/agent-memory
