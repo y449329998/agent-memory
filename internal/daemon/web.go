@@ -208,11 +208,17 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	rows, err := s.st.ListSources(r.Context(), r.URL.Query().Get("agent"),
-		r.URL.Query().Get("failed") == "1", limit)
+	agent := r.URL.Query().Get("agent")
+	failedOnly := r.URL.Query().Get("failed") == "1"
+	total, err := s.st.CountSources(r.Context(), agent, failedOnly)
 	if err != nil {
 		httpError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"sources": rows, "count": len(rows)})
+	rows, err := s.st.ListSources(r.Context(), agent, failedOnly, limit)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sources": rows, "count": len(rows), "total": total})
 }

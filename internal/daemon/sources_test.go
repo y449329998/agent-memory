@@ -30,26 +30,22 @@ func TestSourcesEndpoint(t *testing.T) {
 			LastError string `json:"last_error"`
 		} `json:"sources"`
 		Count int `json:"count"`
+		Total int `json:"total"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.Count != 2 {
-		t.Fatalf("count=%d want 2", out.Count)
+	if out.Count != 2 || out.Total != 2 {
+		t.Fatalf("count=%d total=%d want 2/2", out.Count, out.Total)
 	}
 
 	rec = webDo(t, s, http.MethodGet, "/v1/sources?failed=1", webToken, nil, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("failed filter code=%d", rec.Code)
 	}
-	out = struct {
-		Sources []struct {
-			Agent     string `json:"agent"`
-			Path      string `json:"path"`
-			LastError string `json:"last_error"`
-		} `json:"sources"`
-		Count int `json:"count"`
-	}{}
+	out.Count = 0
+	out.Total = 0
+	out.Sources = nil
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}

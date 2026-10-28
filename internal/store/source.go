@@ -319,3 +319,19 @@ FROM source WHERE 1=1`
 	}
 	return out, rows.Err()
 }
+
+// CountSources 返回与 ListSources 相同条件下的总数。
+func (s *Store) CountSources(ctx context.Context, agent string, failedOnly bool) (int, error) {
+	q := `SELECT count(*) FROM source WHERE 1=1`
+	args := []any{}
+	if agent != "" {
+		q += ` AND agent = ?`
+		args = append(args, agent)
+	}
+	if failedOnly {
+		q += ` AND last_error <> ''`
+	}
+	var n int
+	err := s.db.QueryRowContext(ctx, q, args...).Scan(&n)
+	return n, err
+}

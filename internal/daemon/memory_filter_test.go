@@ -45,12 +45,13 @@ func TestMemoryListFilters(t *testing.T) {
 		}
 		var out struct {
 			Count int `json:"count"`
+			Total int `json:"total"`
 		}
 		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 			t.Fatal(err)
 		}
-		if out.Count != c.want {
-			t.Fatalf("%s count=%d want %d", c.url, out.Count, c.want)
+		if out.Count != c.want || out.Total != c.want {
+			t.Fatalf("%s count=%d total=%d want %d", c.url, out.Count, out.Total, c.want)
 		}
 	}
 }

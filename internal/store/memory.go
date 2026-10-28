@@ -459,3 +459,42 @@ func (s *Store) ListMemoriesFiltered(ctx context.Context, f MemoryFilter) ([]dom
 	}
 	return out, nil
 }
+
+// memoryWhere 把过滤条件拼成 WHERE 片段，列表与计数共用，避免两套条件漂移。
+func memoryWhere(f MemoryFilter) (string, []any) {
+	q := ` WHERE 1=1`
+	args := []any{}
+	switch {
+	case f.AllProjects:
+	case f.ProjectID > 0:
+		q += ` AND (project_id = ? OR scope = ?)`
+		args = append(args, f.ProjectID, string(domain.ScopeUser))
+	default:
+		q += ` AND scope = ?`
+		args = append(args, string(domain.ScopeUser))
+	}
+	if f.Scope != "" {
+		q += ` AND scope = ?`
+		args = append(args, string(f.Scope))
+	}
+	if f.Type != "" {
+		q += ` AND type = ?`
+		args = append(args, string(f.Type))
+	}
+	if f.Stale != nil {
+		if *f.Stale {
+			q += ` AND stale = 1`
+		} else {
+			q += ` AND stale = 0`
+		}
+	}
+	return q, args
+}
+
+// CountMemoriesFiltered 返回与列表相同条件下的总数，供 UI 显示「共 N 条」。
+func (s *Store) CountMemoriesFiltered(ctx context.Context, f MemoryFilter) (int, error) {
+	where, args := memoryWhere(f)
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM memory_item`+where, args...).Scan(&n)
+	return n, err
+}

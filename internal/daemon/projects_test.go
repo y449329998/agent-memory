@@ -32,6 +32,7 @@ func TestProjectsEndpointCounts(t *testing.T) {
 			MemoryCount  int    `json:"memory_count"`
 			StaleCount   int    `json:"stale_count"`
 			LastMemoryAt string `json:"last_memory_at"`
+			PathExists   bool   `json:"path_exists"`
 		} `json:"projects"`
 		Count int `json:"count"`
 	}
@@ -43,5 +44,9 @@ func TestProjectsEndpointCounts(t *testing.T) {
 	}
 	if out.Projects[0].LastMemoryAt == "" {
 		t.Fatalf("last_memory_at missing: %+v", out.Projects[0])
+	}
+	// 测试里的项目路径是虚构的，必须报告为不存在，前端据此跳过自动选中。
+	if out.Projects[0].PathExists {
+		t.Fatalf("fictional path must not be reported as existing: %+v", out.Projects[0])
 	}
 }

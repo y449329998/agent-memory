@@ -115,6 +115,7 @@ type projectSummary struct {
 	MemoryCount  int    `json:"memory_count"`
 	StaleCount   int    `json:"stale_count"`
 	LastMemoryAt string `json:"last_memory_at"`
+	PathExists   bool   `json:"path_exists"`
 }
 
 func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
@@ -132,6 +133,7 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 		out = append(out, projectSummary{
 			ID: p.ID, Key: p.Key, DisplayName: p.DisplayName, PrimaryPath: p.PrimaryPath,
 			MemoryCount: p.MemoryCount, StaleCount: p.StaleCount, LastMemoryAt: last,
+			PathExists: p.PrimaryPath != "" && dirExists(p.PrimaryPath),
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"projects": out, "count": len(out)})
@@ -313,12 +315,17 @@ func (s *Server) handleListMemory(w http.ResponseWriter, r *http.Request) {
 		filter.ProjectID = id
 	}
 
+	total, err := s.st.CountMemoriesFiltered(ctx, filter)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
 	items, err := s.st.ListMemoriesFiltered(ctx, filter)
 	if err != nil {
 		httpError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"memories": items, "count": len(items)})
+	writeJSON(w, http.StatusOK, map[string]any{"memories": items, "count": len(items), "total": total})
 }
 
 func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
@@ -509,4 +516,9 @@ func (s *Server) ListenAndServe(ctx context.Context, portPath string) error {
 		return err
 	}
 	return nil
+}
+
+func dirExists(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.IsDir()
 }
