@@ -4,7 +4,7 @@
 
 M1 接入 Qoder 的记忆文件；M2 起再导入它的会话历史，提炼任务卡并生成项目交接简报。M3 增加常驻服务 `serve`、stdio 桥 `mcp` 与 `link`，让 Qoder / OpenCode / Claude 通过 MCP 直接读写共享记忆。Trae / WorkBuddy 的 MCP 配置格式尚未确证，仍只通过项目里的 `HANDOFF.md` 读取。
 
-设计文档见 `docs/superpowers/specs/`，实施计划见 `docs/superpowers/plans/`。
+详见 [docs/usage.md](docs/usage.md)（命令、配置、Web UI、MCP 接入、排错）。设计文档见 `docs/superpowers/specs/`，实施计划见 `docs/superpowers/plans/`。
 
 ## 现在能做什么
 

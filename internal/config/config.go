@@ -15,7 +15,6 @@ import (
 const (
 	dirName         = ".agent-memory"
 	defaultInterval = 30 * time.Second
-	defaultMemLimit = 20
 )
 
 type Config struct {
@@ -31,8 +30,7 @@ type QoderConfig struct {
 }
 
 type ScanConfig struct {
-	Interval       time.Duration `toml:"interval"`
-	MemoryListSize int           `toml:"memory_list_size"`
+	Interval time.Duration `toml:"interval"`
 }
 
 // HandoffConfig 控制交接简报的口径：预算、带几张任务卡、会话多久算写完。
@@ -48,7 +46,7 @@ func Default(userHome string) Config {
 	return Config{
 		DataDir: filepath.Join(userHome, dirName),
 		Qoder:   QoderConfig{},
-		Scan:    ScanConfig{Interval: defaultInterval, MemoryListSize: defaultMemLimit},
+		Scan:    ScanConfig{Interval: defaultInterval},
 		// 1500 实测放不下真实项目：全局偏好与项目约束本身约 2.3k token，
 		// 任务卡与未决问题会被整段裁掉。全量六节约 3.5k token，留出余量取 4000。
 		Handoff: HandoffConfig{BudgetTokens: 4000, RecentCards: 3, SettleIdle: 5 * time.Minute},
@@ -143,9 +141,6 @@ func Load(path, userHome string) (Config, error) {
 	}
 	if c.Scan.Interval <= 0 {
 		c.Scan.Interval = defaultInterval
-	}
-	if c.Scan.MemoryListSize <= 0 {
-		c.Scan.MemoryListSize = defaultMemLimit
 	}
 	if c.Handoff.BudgetTokens <= 0 {
 		c.Handoff.BudgetTokens = Default(userHome).Handoff.BudgetTokens
