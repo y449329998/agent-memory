@@ -3795,6 +3795,13 @@ git commit -m "feat: Qoder 目录发现与会话反查项目路径适配器"
 
 ## Task 13: 扫描编排、幂等门控与过时标记
 
+> **实施修正（已落地，以代码为准）**：
+> 1. `MarkStaleExcept` 被替换为 `MarkStaleForRun(ctx, agents []string, runAt int64)`：只把「全部来源都属于本轮扫过的 agent、且本轮一条都没再见到」的条目置 stale。原实现会把「qoder+trae 共同支撑、只扫了 qoder」的条目标成过时。
+> 2. 轮次标记与时间戳解耦：`runAt` 是单调递增的轮次序号（`max(now, max(last_seen_run)+1)`），只用于 `last_seen_run`；`first_seen_at`/`changed_at`/`updated_at` 一律用墙钟。否则连续手动扫描会让时间戳落在未来，时钟回拨后永不收敛。
+> 3. `UpsertMemory` 整体包 `BEGIN IMMEDIATE` 事务，DSN 带 `_txlock=immediate`：两个进程（daemon + 手动 scan）并发写同文本时，deferred 事务会撞 `SQLITE_BUSY`。
+> 4. 任一 draft upsert 失败时不写 `PutSource`，保住哈希门控，让下一轮重试而不是静默跳过。
+> 5. 错误源测试改用注入 `faultyAdapter` 的 unit，因为 Qoder 适配器会在 `ReadFile` 之前就用 `IsDir()` 过滤掉「目录冒充的 .md」。
+
 **Files:**
 - Create: `internal/ingest/ingest.go`
 - Modify: `internal/store/source.go`（追加 `TouchSource`）
