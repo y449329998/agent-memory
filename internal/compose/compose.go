@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	defaultBudgetTokens = 1500
+	defaultBudgetTokens = 4000
 	defaultRecentCards  = 3
 )
 

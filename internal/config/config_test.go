@@ -115,15 +115,15 @@ func TestSaveThenLoad_RoundTrips(t *testing.T) {
 	if got.Handoff.SettleIdle != 90*time.Second {
 		t.Fatalf("round trip lost handoff settle idle: %v", got.Handoff.SettleIdle)
 	}
-	if got.Handoff.BudgetTokens != 1500 || got.Handoff.RecentCards != 3 {
+	if got.Handoff.BudgetTokens != 4000 || got.Handoff.RecentCards != 3 {
 		t.Fatalf("round trip lost handoff defaults: %+v", got.Handoff)
 	}
 }
 
 func TestDefault_HandoffSection(t *testing.T) {
 	c := Default(t.TempDir())
-	if c.Handoff.BudgetTokens != 1500 {
-		t.Fatalf("budget = %d, want 1500", c.Handoff.BudgetTokens)
+	if c.Handoff.BudgetTokens != 4000 {
+		t.Fatalf("budget = %d, want 4000", c.Handoff.BudgetTokens)
 	}
 	if c.Handoff.RecentCards != 3 {
 		t.Fatalf("recent cards = %d, want 3", c.Handoff.RecentCards)

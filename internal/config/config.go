@@ -49,7 +49,9 @@ func Default(userHome string) Config {
 		DataDir: filepath.Join(userHome, dirName),
 		Qoder:   QoderConfig{},
 		Scan:    ScanConfig{Interval: defaultInterval, MemoryListSize: defaultMemLimit},
-		Handoff: HandoffConfig{BudgetTokens: 1500, RecentCards: 3, SettleIdle: 5 * time.Minute},
+		// 1500 实测放不下真实项目：全局偏好与项目约束本身约 2.3k token，
+		// 任务卡与未决问题会被整段裁掉。全量六节约 3.5k token，留出余量取 4000。
+		Handoff: HandoffConfig{BudgetTokens: 4000, RecentCards: 3, SettleIdle: 5 * time.Minute},
 	}
 }
 

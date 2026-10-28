@@ -192,12 +192,12 @@ func TestHandoff_BudgetFlagOverridesConfig(t *testing.T) {
 		t.Fatalf("--budget should override config, got %q", out.String())
 	}
 
-	// 0 表示用配置值（缺省 1500）
+	// 0 表示用配置值（缺省 4000）
 	out.Reset()
 	if code := run(t, &out, "handoff", "--project", projectDir, "--budget", "0"); code != 0 {
 		t.Fatalf("handoff --budget 0 exit %d: %s", code, out.String())
 	}
-	if !strings.Contains(out.String(), "budget=1500") {
+	if !strings.Contains(out.String(), "budget=4000") {
 		t.Fatalf("--budget 0 should fall back to configured budget, got %q", out.String())
 	}
 }
