@@ -56,6 +56,27 @@ FROM project WHERE key = ?`, key).Scan(
 	return p, true, nil
 }
 
+func (s *Store) ProjectByID(ctx context.Context, id int64) (domain.Project, bool, error) {
+	var (
+		p       domain.Project
+		created int64
+		updated int64
+	)
+	err := s.db.QueryRowContext(ctx, `
+SELECT id, key, display_name, git_remote, primary_path, created_at, updated_at
+FROM project WHERE id = ?`, id).Scan(
+		&p.ID, &p.Key, &p.DisplayName, &p.GitRemote, &p.PrimaryPath, &created, &updated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.Project{}, false, nil
+	}
+	if err != nil {
+		return domain.Project{}, false, err
+	}
+	p.CreatedAt = time.Unix(created, 0)
+	p.UpdatedAt = time.Unix(updated, 0)
+	return p, true, nil
+}
+
 // LinkProjectPath 登记「某 agent 在某处把这个项目写成什么路径」。path 先归一化再存，
 // 因为各 agent 对同一路径的写法不同（反斜杠、大小写、尾部分隔符）。
 func (s *Store) LinkProjectPath(ctx context.Context, projectID int64, agent, slug, path, confidence string) error {

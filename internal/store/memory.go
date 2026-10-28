@@ -232,6 +232,17 @@ func (s *Store) ListMemories(ctx context.Context, projectID int64, includeStale 
 	return out, nil
 }
 
+// SetStaleByID 置或清条目的过时标记。MCP 的 supersedes、doctor 与测试都走这里；
+// 直接对外暴露 *sql.DB 会让「唯一写入口」这条边界失效。
+func (s *Store) SetStaleByID(ctx context.Context, id int64, stale bool) error {
+	flag := 0
+	if stale {
+		flag = 1
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE memory_item SET stale = ? WHERE id = ?`, flag, id)
+	return err
+}
+
 // MarkStaleForRun 把「所有支撑来源都属于本轮扫过的 agent、且本轮一条都没再见到」的条目置为过时。
 // 共同支撑的条目只要有一个来源本轮见过就保持新鲜；来源属于未扫描 agent 的条目一律不动——
 // 那些 agent 这一轮根本没看，不能把「没看」当成「不见了」。
