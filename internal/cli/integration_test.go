@@ -443,3 +443,99 @@ func TestHelpListsCommands(t *testing.T) {
 		}
 	}
 }
+
+// TestMemoryAdd_SecondCheckoutReusesRemoteProject 回归：另一份未扫描过的 checkout
+// 也必须先读 git remote 再决定是否新建，否则同一个仓库会出现两个项目。
+func TestMemoryAdd_SecondCheckoutReusesRemoteProject(t *testing.T) {
+	home, _, repo := isolateHome(t)
+	const remote = "git@example.com:acme/demo.git"
+	mustWrite(t, filepath.Join(repo, ".git", "config"), "[remote \"origin\"]\n\turl = "+remote+"\n")
+
+	var out bytes.Buffer
+	if code := run(t, &out, "scan"); code != 0 {
+		t.Fatalf("scan exit %d: %s", code, out.String())
+	}
+
+	// 同 remote 的第二份 checkout，库里还没有它的路径映射
+	other := filepath.Join(home, "code", "demo-second")
+	mustMkdir(t, other)
+	mustWrite(t, filepath.Join(other, ".git", "config"), "[remote \"origin\"]\n\turl = "+remote+"\n")
+
+	out.Reset()
+	if code := run(t, &out, "memory", "add", "扣减阈值需配置化", "--scope", "project", "--project", other); code != 0 {
+		t.Fatalf("add --project exit %d: %s", code, out.String())
+	}
+
+	st, err := store.Open(filepath.Join(home, ".agent-memory", "memory.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+
+	n, err := st.QueryInt(ctx, `SELECT count(*) FROM project`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		keys, _ := st.QueryStrings(ctx, `SELECT key FROM project ORDER BY key`)
+		t.Fatalf("project rows = %d %v, want 1 (same remote must merge)", n, keys)
+	}
+
+	projectID, err := st.QueryInt(ctx, `SELECT id FROM project WHERE key = 'example.com/acme/demo'`)
+	if err != nil || projectID == 0 {
+		t.Fatalf("remote-keyed project not found: id=%d err=%v", projectID, err)
+	}
+	shared, err := st.QueryInt(ctx,
+		`SELECT count(*) FROM memory_item WHERE scope = 'project' AND project_id = ?`, projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shared != 2 {
+		t.Fatalf("project-scope memories under project_id %d = %d, want 2 (scan + CLI add)", projectID, shared)
+	}
+}
+
+// TestDoctor_ReportsSamePathMappedToMultipleProjects 覆盖历史脏数据：
+// 同一 path 出现在两个 project_id 下时，doctor 必须给出可见告警（不自动合并）。
+func TestDoctor_ReportsSamePathMappedToMultipleProjects(t *testing.T) {
+	home, _, _ := isolateHome(t)
+	var out bytes.Buffer
+	if code := run(t, &out, "init"); code != 0 {
+		t.Fatalf("init exit %d", code)
+	}
+
+	st, err := store.Open(filepath.Join(home, ".agent-memory", "memory.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	ctx := context.Background()
+	now := time.Now()
+	remoteID, err := st.EnsureProject(ctx, "github.com/foo/bar", "bar", "git@github.com:foo/bar.git", `F:\go\dup`, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pathID, err := st.EnsureProject(ctx, "f:/go/dup", "dup", "", `F:\go\dup`, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.LinkProjectPath(ctx, remoteID, "qoder", "F--go-dup", `F:\go\dup`, "high"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.LinkProjectPath(ctx, pathID, "mcp", "", `F:\go\dup`, "high"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	out.Reset()
+	if code := run(t, &out, "doctor"); code != 0 {
+		t.Fatalf("doctor exit %d", code)
+	}
+	for _, want := range []string{"同一路径映射到多个项目", "f:/go/dup", "github.com/foo/bar"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("doctor missing %q:\n%s", want, out.String())
+		}
+	}
+}

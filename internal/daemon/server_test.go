@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -149,5 +150,71 @@ func TestHandoffEndpointReturnsNotFoundForUnknownProject(t *testing.T) {
 	rec := doJSON(t, s, http.MethodGet, "/v1/handoff?project_path=Z%3A%5Cnope", "test-token-0123456789abcdef", nil)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("code = %d, want 404", rec.Code)
+	}
+}
+
+// writeGitRemote 在 dir 下造一个最小 .git/config，供 GitRemoteFromConfig 读取。
+func writeGitRemote(t *testing.T, dir, url string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := "[remote \"origin\"]\n\turl = " + url + "\n"
+	if err := os.WriteFile(filepath.Join(dir, ".git", "config"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestAddProjectMemoryReusesRemoteKeyedProject 回归：HTTP/MCP 写入曾直接用空 remote 调
+// ProjectIDForPath，绕过扫描登记的路径映射，把同一个仓库拆成两个项目。
+func TestAddProjectMemoryReusesRemoteKeyedProject(t *testing.T) {
+	s, st := newTestServer(t)
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "repo")
+	writeGitRemote(t, dir, "git@github.com:foo/bar.git")
+
+	// 模拟扫描：按 remote 建项目并登记路径映射。
+	scanned, _, err := st.ProjectIDForPath(ctx, "qoder", "bar", dir, "git@github.com:foo/bar.git", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := doJSON(t, s, http.MethodPost, "/v1/memory", "test-token-0123456789abcdef",
+		map[string]any{
+			"text": "外部写入应复用扫描出来的项目", "type": "convention",
+			"scope": "project", "project_path": dir, "agent": "mcp",
+		})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := st.QueryInt(ctx, `SELECT count(*) FROM project`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		keys, _ := st.QueryStrings(ctx, `SELECT key FROM project ORDER BY key`)
+		t.Fatalf("project rows = %d %v, want 1", n, keys)
+	}
+
+	got, err := st.QueryInt(ctx, `SELECT project_id FROM memory_item WHERE id = ?`, out.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int64(got) != scanned {
+		t.Fatalf("memory project_id = %d, want scanned remote project %d", got, scanned)
+	}
+	p, ok, err := st.ProjectByKey(ctx, "github.com/foo/bar")
+	if err != nil || !ok {
+		t.Fatalf("remote-keyed project missing: ok=%v err=%v", ok, err)
+	}
+	if p.ID != scanned {
+		t.Fatalf("remote project id = %d, want %d", p.ID, scanned)
 	}
 }

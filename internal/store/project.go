@@ -119,8 +119,34 @@ LIMIT 1`, key).Scan(&id)
 	return id, true, nil
 }
 
+// ResolveOrCreateProject 按「路径映射 → git remote → 新建」的顺序解析项目。
+// 所有外部写入（MCP、CLI add、link 登记）都必须走这里：
+// 任何一处直接调 ProjectIDForPath 都会在没有 remote 的情况下造出重复项目。
+func (s *Store) ResolveOrCreateProject(ctx context.Context, agent, slug, path string, at time.Time) (int64, string, error) {
+	if id, ok, err := s.ResolveProjectByPath(ctx, path); err != nil {
+		return 0, "", err
+	} else if ok {
+		p, ok, err := s.ProjectByID(ctx, id)
+		if err != nil {
+			return 0, "", err
+		}
+		if !ok {
+			return 0, "", fmt.Errorf("project %d referenced by path %q is missing", id, path)
+		}
+		return p.ID, p.Key, nil
+	}
+	// 读不到 remote 不算致命：退化为路径 key，只是少了跨 checkout 合并的能力。
+	remote := ""
+	if v, ok, err := normalize.GitRemoteFromConfig(path); err == nil && ok {
+		remote = v
+	}
+	return s.ProjectIDForPath(ctx, agent, slug, path, remote, at)
+}
+
 // ProjectIDForPath 解析或创建项目：git remote 决定 key，让同一仓库的不同路径写法合并。
 // 读不到 remote 时退化为路径 key。primaryPath 存原始写法便于展示。
+// 它是底层原语：调用方必须自己保证「已有映射 / remote」都已查过，
+// 外部写入请统一走 ResolveOrCreateProject。
 func (s *Store) ProjectIDForPath(ctx context.Context, agent, slug, rawPath, gitRemote string, at time.Time) (int64, string, error) {
 	key := normalize.ProjectKey(gitRemote, rawPath)
 	if key == "" {

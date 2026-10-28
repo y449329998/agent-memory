@@ -47,18 +47,15 @@ func (r Result) String() string {
 type Runner struct {
 	store    *store.Store
 	adapters []agent.Adapter
-	// RemoteReader 可读 git remote；测试里替换掉，默认实现直接解析 .git/config。
-	RemoteReader func(dir string) (string, bool, error)
 	// SettleIdle 是「会话算写完」的空闲阈值，默认 5 分钟。
 	SettleIdle time.Duration
 }
 
 func New(st *store.Store, adapters ...agent.Adapter) *Runner {
 	return &Runner{
-		store:        st,
-		adapters:     adapters,
-		RemoteReader: normalize.GitRemoteFromConfig,
-		SettleIdle:   5 * time.Minute,
+		store:      st,
+		adapters:   adapters,
+		SettleIdle: 5 * time.Minute,
 	}
 }
 
@@ -350,8 +347,9 @@ func (r *Runner) projectForDraft(ctx context.Context, drafts []domain.MemoryDraf
 // 并且不写 project_path 映射：slug 里的 '-' 既可能是层级分隔符也可能是项目名的一部分，
 // 猜错就会把两个不同项目并成一个，那比留两个孤立项目更糟。
 //
-// 高置信时先按路径反查——同一份 checkout 重扫应当命中同一个项目；
-// 未命中再读 .git/config 的 remote，让同一仓库的多份 checkout 合并成一个项目。
+// 高置信时与 MCP/CLI 外部写入共用 store.ResolveOrCreateProject：
+// 先按路径反查（同一份 checkout 重扫命中同一个项目），未命中再读 .git/config
+// 的 remote（同一仓库的多份 checkout 合并成一个项目），最后才新建。
 func (r *Runner) resolveProject(ctx context.Context, agent, slug, path, confidence string, at time.Time) (int64, error) {
 	if confidence != "high" || path == "" {
 		if slug == "" {
@@ -359,24 +357,6 @@ func (r *Runner) resolveProject(ctx context.Context, agent, slug, path, confiden
 		}
 		return r.store.EnsureProject(ctx, agent+":"+slug, slug, "", "", at)
 	}
-
-	if id, ok, err := r.store.ResolveProjectByPath(ctx, path); err != nil {
-		return 0, err
-	} else if ok {
-		// 同一路径已经归属某个项目：补记本 agent 的 slug 关联，映射表随扫描收敛
-		if err := r.store.LinkProjectPath(ctx, id, agent, slug, path, "high"); err != nil {
-			return 0, err
-		}
-		return id, nil
-	}
-
-	remote := ""
-	// 读不到 remote 不算致命：退化为路径 key，只是少了跨 checkout 合并的能力
-	if r.RemoteReader != nil {
-		if v, ok, err := r.RemoteReader(path); err == nil && ok {
-			remote = v
-		}
-	}
-	id, _, err := r.store.ProjectIDForPath(ctx, agent, slug, path, remote, at)
+	id, _, err := r.store.ResolveOrCreateProject(ctx, agent, slug, path, at)
 	return id, err
 }

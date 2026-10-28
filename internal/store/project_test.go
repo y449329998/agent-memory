@@ -2,12 +2,25 @@ package store
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/muyi99/agent-memory/internal/normalize"
 )
+
+// writeGitRemote 在 dir 下造一个最小 .git/config，供 GitRemoteFromConfig 读取。
+func writeGitRemote(t *testing.T, dir, url string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := "[remote \"origin\"]\n\turl = " + url + "\n"
+	if err := os.WriteFile(filepath.Join(dir, ".git", "config"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestEnsureProject_IdempotentKeepsStableID(t *testing.T) {
 	s := openStore(t)
@@ -179,5 +192,114 @@ func TestResolveProjectByPath_PrefersLatestLinkForSamePath(t *testing.T) {
 	}
 	if got != idB {
 		t.Fatalf("resolved project %d, want latest registration %d (A=%d)", got, idB, idA)
+	}
+}
+
+// TestResolveOrCreateProject_PrefersExistingPathMapping 覆盖「同路径已有映射」：
+// 即使目录里有 remote，已登记的映射也必须胜出，否则同一路径会被拆成两个项目。
+func TestResolveOrCreateProject_PrefersExistingPathMapping(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0)
+	dir := filepath.Join(t.TempDir(), "repo")
+	writeGitRemote(t, dir, "git@github.com:foo/bar.git")
+
+	legacy, err := s.EnsureProject(ctx, "f:/legacy/repo", "repo", "", dir, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.LinkProjectPath(ctx, legacy, "qoder", "F--legacy-repo", dir, "high"); err != nil {
+		t.Fatal(err)
+	}
+
+	id, key, err := s.ResolveOrCreateProject(ctx, "mcp", "", dir, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != legacy || key != "f:/legacy/repo" {
+		t.Fatalf("got (%d,%q), want existing mapping (%d,%q)", id, key, legacy, "f:/legacy/repo")
+	}
+	if n, err := s.QueryInt(ctx, `SELECT count(*) FROM project`); err != nil {
+		t.Fatal(err)
+	} else if n != 1 {
+		t.Fatalf("project rows = %d, want 1 (existing mapping must win)", n)
+	}
+}
+
+// TestResolveOrCreateProject_UsesGitRemoteWhenUnmapped 覆盖「未映射但有 remote」：
+// 新建项目必须按 remote 取 key，这样另一份 checkout 也会并进同一个项目。
+func TestResolveOrCreateProject_UsesGitRemoteWhenUnmapped(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0)
+	dir := filepath.Join(t.TempDir(), "checkout-a")
+	writeGitRemote(t, dir, "git@github.com:Foo/Bar.git")
+
+	id, key, err := s.ResolveOrCreateProject(ctx, "mcp", "bar", dir, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key != "github.com/foo/bar" {
+		t.Fatalf("key = %q, want github.com/foo/bar", key)
+	}
+	p, ok, err := s.ProjectByKey(ctx, key)
+	if err != nil || !ok {
+		t.Fatalf("ProjectByKey ok=%v err=%v", ok, err)
+	}
+	if p.ID != id || p.GitRemote == "" {
+		t.Fatalf("project not keyed by remote: %+v", p)
+	}
+
+	// 幂等：同一路径再解析一次不得新建。
+	if again, _, err := s.ResolveOrCreateProject(ctx, "mcp", "bar", dir, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	} else if again != id {
+		t.Fatalf("second resolve got %d, want %d", again, id)
+	}
+
+	// 同 remote 的另一份 checkout 也必须并进来。
+	other := filepath.Join(t.TempDir(), "checkout-b")
+	writeGitRemote(t, other, "https://github.com/foo/bar.git")
+	if otherID, otherKey, err := s.ResolveOrCreateProject(ctx, "cli", "", other, now); err != nil {
+		t.Fatal(err)
+	} else if otherID != id || otherKey != key {
+		t.Fatalf("second checkout got (%d,%q), want (%d,%q)", otherID, otherKey, id, key)
+	}
+	if n, err := s.QueryInt(ctx, `SELECT count(*) FROM project`); err != nil {
+		t.Fatal(err)
+	} else if n != 1 {
+		t.Fatalf("project rows = %d, want 1 (same remote must merge)", n)
+	}
+}
+
+// TestResolveOrCreateProject_FallsBackToPathKey 覆盖「两者都没有」：
+// 读不到 remote 时退化为路径 key，git_remote 留空，不报错。
+func TestResolveOrCreateProject_FallsBackToPathKey(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0)
+	dir := filepath.Join(t.TempDir(), "plain")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	id, key, err := s.ResolveOrCreateProject(ctx, "cli", "", dir, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := normalize.ProjectKey("", dir); key != want {
+		t.Fatalf("key = %q, want path key %q", key, want)
+	}
+	p, ok, err := s.ProjectByID(ctx, id)
+	if err != nil || !ok {
+		t.Fatalf("ProjectByID ok=%v err=%v", ok, err)
+	}
+	if p.GitRemote != "" {
+		t.Fatalf("git_remote = %q, want empty", p.GitRemote)
+	}
+	if n, err := s.QueryInt(ctx, `SELECT count(*) FROM project`); err != nil {
+		t.Fatal(err)
+	} else if n != 1 {
+		t.Fatalf("project rows = %d, want 1", n)
 	}
 }

@@ -131,17 +131,13 @@ func memoryAdd(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "error: --scope project 需要 --project <绝对路径>")
 			return 2
 		}
-		// 路径已被扫描登记过项目（可能以 git remote 为 key）时必须复用，
+		// 与扫描共用同一套解析顺序（路径映射 → git remote → 新建），
 		// 否则会再造一个按路径命名的项目，把扫描来的项目孤立掉。
-		id, ok, err := e.st.ResolveProjectByPath(ctx, *projectRef)
+		id, _, err := e.st.ResolveOrCreateProject(ctx, *agentName, "", *projectRef, time.Now())
 		if err != nil {
 			return reportError(stderr, err)
 		}
-		if ok {
-			projectID = id
-		} else if projectID, _, err = e.st.ProjectIDForPath(ctx, *agentName, "", *projectRef, "", time.Now()); err != nil {
-			return reportError(stderr, err)
-		}
+		projectID = id
 	default:
 		fmt.Fprintf(stderr, "error: unknown scope %q\n", *scope)
 		return 2

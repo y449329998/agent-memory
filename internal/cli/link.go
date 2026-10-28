@@ -93,11 +93,8 @@ func cmdLink(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	defer st.Close()
-	projectID, ok, err := st.ResolveProjectByPath(ctx, opts.ProjectDir)
-	if err == nil && !ok {
-		// 新项目先 link 再 scan 也是合法顺序：库里没有映射时按路径建。
-		projectID, _, err = st.ProjectIDForPath(ctx, target, "", opts.ProjectDir, "", time.Now())
-	}
+	// 新项目先 link 再 scan 也是合法顺序：库里没有映射时按 remote / 路径建。
+	projectID, _, err := st.ResolveOrCreateProject(ctx, target, "", opts.ProjectDir, time.Now())
 	if err != nil {
 		fmt.Fprintf(stderr, "warn: 项目未登记进库: %v\n", err)
 		return 0

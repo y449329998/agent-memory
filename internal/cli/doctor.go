@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -119,6 +120,31 @@ ORDER BY key LIMIT 20`)
 		for _, k := range unmerged {
 			fmt.Fprintf(stdout, "  %s\n", k)
 		}
+	}
+
+	// 同一物理路径被登记到多个项目：典型成因是外部写入（MCP / CLI add）绕过路径映射
+	// 直接用空 remote 新建项目。这里只报出来，不自动合并——哪个项目才是真的需要人判断，
+	// 合并错了比留两份更难恢复。
+	dupPaths, err := e.st.QueryStrings(ctx, `
+SELECT path FROM project_path
+GROUP BY path HAVING COUNT(DISTINCT project_id) > 1
+ORDER BY path LIMIT 20`)
+	if err != nil {
+		return reportError(stderr, err)
+	}
+	if len(dupPaths) > 0 {
+		fmt.Fprintf(stdout, "\n警告: 同一路径映射到多个项目（历史脏数据，未自动合并）:\n")
+		for _, p := range dupPaths {
+			// QueryStrings 会读尽并关闭 rows，单连接下随之逐条查询是安全的。
+			keys, err := e.st.QueryStrings(ctx, `
+SELECT p.key FROM project_path pp JOIN project p ON p.id = pp.project_id
+WHERE pp.path = ? ORDER BY p.id`, p)
+			if err != nil {
+				return reportError(stderr, err)
+			}
+			fmt.Fprintf(stdout, "  %s -> %s\n", p, strings.Join(keys, ", "))
+		}
+		fmt.Fprintln(stdout, "  确认真实项目后手工合并（把该路径改指向它，或删除多余项目的映射）")
 	}
 
 	needFull, err := e.st.QueryInt(ctx, `SELECT count(*) FROM source WHERE kind = 'memory' AND last_error <> ''`)

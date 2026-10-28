@@ -195,7 +195,9 @@ func (s *Server) addMemory(ctx context.Context, req addRequest) (addResult, erro
 		if strings.TrimSpace(req.ProjectPath) == "" {
 			return addResult{}, badInput("scope=project needs project_path")
 		}
-		id, _, err := s.st.ProjectIDForPath(ctx, agent, "", req.ProjectPath, "", time.Now())
+		// 与扫描共用同一套解析顺序（路径映射 → git remote）：直接按空 remote 建项目
+		// 会把同一个仓库拆成「remote 项目」和「路径项目」两个。
+		id, _, err := s.st.ResolveOrCreateProject(ctx, agent, "", req.ProjectPath, time.Now())
 		if err != nil {
 			return addResult{}, err
 		}
