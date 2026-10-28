@@ -182,6 +182,10 @@ func watchDirs(adapters []agent.Adapter) []string {
 // refreshHandoffFiles；这里只负责把「已更新」打到常驻日志。
 func refreshHandoffsFor(ctx context.Context, st *store.Store, cfg config.Config, stdout io.Writer) {
 	for _, r := range refreshHandoffFiles(ctx, st, cfg) {
+		if r.Warn != "" {
+			fmt.Fprintf(stdout, "  %s\n", r.Warn)
+			continue
+		}
 		if r.Err != nil {
 			fmt.Fprintf(stdout, "  %v\n", r.Err)
 			continue

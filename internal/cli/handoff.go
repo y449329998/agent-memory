@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/muyi99/agent-memory/internal/compose"
@@ -40,6 +41,12 @@ func cmdHandoff(args []string, stdout, stderr io.Writer) int {
 	abs, err := filepath.Abs(target)
 	if err != nil {
 		return reportError(stderr, err)
+	}
+	// 显式 --project 也可能指向 agent 自己的配置树；那里不是项目目录，
+	// 写 .agent-memory 会污染 agent 原生配置。跳过不是失败，退出码保持 0。
+	if IsProtectedAgentDir(abs) {
+		fmt.Fprintf(stderr, "warn: 拒绝写入 agent 原生目录 %s\n", abs)
+		return 0
 	}
 
 	e, err := openEnv()
@@ -96,21 +103,54 @@ func cmdHandoff(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// handoffRefresh 是单个项目的简报刷新结果，scan 与 serve 共用。
+// handoffRefresh 是单个项目（或单个写入目标）的简报刷新结果，scan 与 serve 共用。
 type handoffRefresh struct {
 	Key     string
 	Path    string
 	Tokens  int
 	Changed bool
+	Warn    string
 	Err     error
 }
 
-// refreshHandoffFiles 是简报落盘的唯一实现：scan、serve 与 handoff 都走这里，
-// 避免两套逻辑各自漂移。
+// handoffDirs 取项目所有已登记的高置信度 checkout，还原成本地路径并过滤掉已不存在的目录。
 //
-// 每个项目都会写库（SaveHandoff 本身幂等），这样 budget/generated_at 跟着本次扫描走；
-// 只有正文变化（changed）才维护 git exclude 并报告「已更新」。
-// 单个项目失败只记录，不影响其他项目——一个坏路径不该让整次扫描少交付。
+// project_path 里存的是归一化 key（小写、斜杠分隔），写盘前只能用 filepath.FromSlash
+// 还原；旧库没有路径映射时退回 primary_path，保证升级后仍能刷新第一份 checkout。
+func handoffDirs(ctx context.Context, st *store.Store, projectID int64, primaryPath string) ([]string, error) {
+	keys, err := st.ListProjectDirs(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	seen := map[string]bool{}
+	add := func(dir string) {
+		dir = filepath.Clean(dir)
+		key := strings.ToLower(dir)
+		if seen[key] {
+			return
+		}
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			return
+		}
+		seen[key] = true
+		out = append(out, dir)
+	}
+	for _, key := range keys {
+		add(filepath.FromSlash(key))
+	}
+	if len(out) == 0 && primaryPath != "" {
+		add(primaryPath)
+	}
+	return out, nil
+}
+
+// refreshHandoffFiles 是简报落盘的唯一实现：scan 与 serve 都走这里，避免两套逻辑各自漂移。
+//
+// 同一 remote 的每份 checkout 都要拿到简报：只写 primary_path 会让第二个 checkout 的
+// AGENTS.md 指向一个永远不存在的文件。每个目标独立处理，一个失败不影响其他目标；
+// 项目只要至少有一个可写目标就写库（SaveHandoff 本身幂等），budget/generated_at
+// 跟着本次扫描走。只有正文变化（changed）才维护 git exclude 并报告「已更新」。
 func refreshHandoffFiles(ctx context.Context, st *store.Store, cfg config.Config) []handoffRefresh {
 	ids, err := st.ProjectIDsForHandoff(ctx)
 	if err != nil {
@@ -120,42 +160,93 @@ func refreshHandoffFiles(ctx context.Context, st *store.Store, cfg config.Config
 	var out []handoffRefresh
 	for _, id := range ids {
 		project, ok, err := st.ProjectByID(ctx, id)
-		if err != nil || !ok || project.PrimaryPath == "" {
+		if err != nil || !ok {
 			continue
 		}
-		if _, err := os.Stat(project.PrimaryPath); err != nil {
-			// 目录已不存在：库里留着项目记录，但不去磁盘上建目录
+		dirs, err := handoffDirs(ctx, st, id, project.PrimaryPath)
+		if err != nil {
+			out = append(out, handoffRefresh{Key: project.Key, Err: fmt.Errorf("handoff %s: %w", project.Key, err)})
 			continue
 		}
-		r := handoffRefresh{Key: project.Key}
+		if len(dirs) == 0 {
+			// 目录都已不存在：库里留着项目记录，但不去磁盘上建目录
+			continue
+		}
 		res, err := compose.New(st, composeCfg).Render(ctx, id)
 		if err != nil {
-			r.Err = fmt.Errorf("handoff %s: %w", project.Key, err)
-			out = append(out, r)
+			out = append(out, handoffRefresh{Key: project.Key, Err: fmt.Errorf("handoff %s: %w", project.Key, err)})
 			continue
 		}
-		r.Tokens = res.Tokens
-		path, changed, err := surface.WriteHandoff(project.PrimaryPath, res.Body)
-		r.Path, r.Changed = path, changed
-		if err != nil {
-			r.Err = fmt.Errorf("handoff %s: %w", project.Key, err)
-			out = append(out, r)
-			continue
+		wrote := false
+		for _, dir := range dirs {
+			if IsProtectedAgentDir(dir) {
+				out = append(out, handoffRefresh{Key: project.Key, Warn: fmt.Sprintf("warn: 拒绝写入 agent 原生目录 %s", dir)})
+				continue
+			}
+			path, changed, err := surface.WriteHandoff(dir, res.Body)
+			if err != nil {
+				out = append(out, handoffRefresh{Key: project.Key, Path: path, Tokens: res.Tokens,
+					Err: fmt.Errorf("handoff %s: %w", project.Key, err)})
+				continue
+			}
+			wrote = true
+			if changed {
+				if _, err := surface.EnsureGitExclude(dir, "/"+surface.DirName+"/"); err != nil {
+					out = append(out, handoffRefresh{Key: project.Key, Path: path, Tokens: res.Tokens,
+						Err: fmt.Errorf("handoff %s: exclude: %w", project.Key, err)})
+					continue
+				}
+			}
+			out = append(out, handoffRefresh{Key: project.Key, Path: path, Tokens: res.Tokens, Changed: changed})
 		}
-		if changed {
-			if _, err := surface.EnsureGitExclude(project.PrimaryPath, "/"+surface.DirName+"/"); err != nil {
-				r.Err = fmt.Errorf("handoff %s: exclude: %w", project.Key, err)
+		if wrote {
+			if _, err := st.SaveHandoff(ctx, store.HandoffRow{
+				ProjectID: id, Body: res.Body, ContentHash: res.ContentHash,
+				BudgetTokens: composeCfg.BudgetTokens, GeneratedAt: time.Now(),
+			}); err != nil {
+				out = append(out, handoffRefresh{Key: project.Key, Err: fmt.Errorf("handoff %s: %w", project.Key, err)})
 			}
 		}
-		if _, err := st.SaveHandoff(ctx, store.HandoffRow{
-			ProjectID: id, Body: res.Body, ContentHash: res.ContentHash,
-			BudgetTokens: composeCfg.BudgetTokens, GeneratedAt: time.Now(),
-		}); err != nil && r.Err == nil {
-			r.Err = fmt.Errorf("handoff %s: %w", project.Key, err)
-		}
-		out = append(out, r)
 	}
 	return out
+}
+
+// protectedAgentDirs 是绝不能写入的 agent 原生配置目录（绝对路径）。
+// 覆盖各家 agent 在用户目录下的默认布局。
+func protectedAgentDirs(home string) []string {
+	return []string{
+		filepath.Join(home, ".qoder-cn"),
+		filepath.Join(home, ".qoder"),
+		filepath.Join(home, ".trae-cn"),
+		filepath.Join(home, ".trae"),
+		filepath.Join(home, ".workbuddy"),
+		filepath.Join(home, ".config", "opencode"),
+		filepath.Join(home, ".claude"),
+	}
+}
+
+// IsProtectedAgentDir 判断路径是否落在任何 agent 的原生配置目录里。
+// 命中意味着调用方可能把简报写进 agent 自己的配置树，必须拒绝。
+func IsProtectedAgentDir(path string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" || path == "" {
+		return false
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	abs = filepath.Clean(abs)
+	for _, dir := range protectedAgentDirs(home) {
+		rel, err := filepath.Rel(filepath.Clean(dir), abs)
+		if err != nil || filepath.IsAbs(rel) {
+			continue
+		}
+		if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+			return true
+		}
+	}
+	return false
 }
 
 // refreshHandoffs 给每个有内容的项目重写简报，返回给 scan 打印的行。
@@ -163,6 +254,10 @@ func refreshHandoffFiles(ctx context.Context, st *store.Store, cfg config.Config
 func refreshHandoffs(ctx context.Context, e *env, _ string) []string {
 	var report []string
 	for _, r := range refreshHandoffFiles(ctx, e.st, e.cfg) {
+		if r.Warn != "" {
+			report = append(report, r.Warn)
+			continue
+		}
 		if r.Err != nil {
 			report = append(report, r.Err.Error())
 			continue

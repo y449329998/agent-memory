@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -269,6 +270,50 @@ func TestResolveOrCreateProject_UsesGitRemoteWhenUnmapped(t *testing.T) {
 		t.Fatal(err)
 	} else if n != 1 {
 		t.Fatalf("project rows = %d, want 1 (same remote must merge)", n)
+	}
+}
+
+// TestListProjectDirs_ReturnsHighConfidenceInRegistrationOrder 回归 I4：
+// 同一 remote 合并后项目有多份 checkout，简报必须能拿到每一份的路径。
+// 只返回 high 置信度、去重，并按登记顺序（id）排列，保证写盘顺序稳定。
+func TestListProjectDirs_ReturnsHighConfidenceInRegistrationOrder(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0)
+
+	id, err := s.EnsureProject(ctx, "github.com/foo/bar", "bar", "", "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 故意先登记 b 再登记 a：结果必须按登记顺序，而不是字典序。
+	if err := s.LinkProjectPath(ctx, id, "qoder", "b", `F:\work\repo-b`, "high"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.LinkProjectPath(ctx, id, "qoder", "a", `F:\work\repo-a`, "high"); err != nil {
+		t.Fatal(err)
+	}
+	// 同一路径换 agent 重复登记：归一化后相同，只能出现一次。
+	if err := s.LinkProjectPath(ctx, id, "claude", "", `f:/work/repo-b/`, "high"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.LinkProjectPath(ctx, id, "workbuddy", "", `F:\work\low`, "low"); err != nil {
+		t.Fatal(err)
+	}
+	other, err := s.EnsureProject(ctx, "github.com/foo/other", "other", "", "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.LinkProjectPath(ctx, other, "qoder", "o", `F:\work\elsewhere`, "high"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.ListProjectDirs(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"f:/work/repo-b", "f:/work/repo-a"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("ListProjectDirs = %q, want %q", got, want)
 	}
 }
 

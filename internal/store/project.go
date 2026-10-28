@@ -162,6 +162,30 @@ func (s *Store) ProjectIDForPath(ctx context.Context, agent, slug, rawPath, gitR
 	return id, key, nil
 }
 
+// ListProjectDirs 返回项目已登记的高置信度路径（归一化 key），按首次登记顺序（id）升序。
+// project_path 只保存归一化 key，写盘的一方需自行用 filepath.FromSlash 还原成本地路径；
+// 同一路径被多个 agent 登记时只返回一次，避免重复写同一个文件。
+func (s *Store) ListProjectDirs(ctx context.Context, projectID int64) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT path FROM project_path
+WHERE project_id = ? AND confidence = 'high'
+GROUP BY path
+ORDER BY MIN(id)`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, err
+		}
+		out = append(out, path)
+	}
+	return out, rows.Err()
+}
+
 // ProjectIDsForHandoff 列出值得一份简报的项目：有项目级记忆或有任务卡的那些，
 // 按 id 升序保证多次运行产出顺序一致。
 func (s *Store) ProjectIDsForHandoff(ctx context.Context) ([]int64, error) {

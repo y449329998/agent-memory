@@ -235,6 +235,126 @@ func TestScanRefreshesHandoffsAndSkipsMissingProjects(t *testing.T) {
 	}
 }
 
+// seedMergedCheckouts 造两份指向同一 remote 的 checkout，并让 Qoder 各记录为一个项目目录。
+// 两份 checkout 的 remote 相同，扫描后必须合并成同一个项目。
+func seedMergedCheckouts(t *testing.T, home, qoderHome string) (repoA, repoB string) {
+	t.Helper()
+	const remote = "git@github.com:demo/shared.git"
+	repos := []string{filepath.Join(home, "code", "checkout-a"), filepath.Join(home, "code", "checkout-b")}
+	for i, repo := range repos {
+		mustMkdir(t, filepath.Join(repo, ".git"))
+		mustWrite(t, filepath.Join(repo, ".git", "config"), "[remote \"origin\"]\n\turl = "+remote+"\n")
+		slug := fmt.Sprintf("demo-%d", i)
+		mustWrite(t, filepath.Join(qoderHome, "projects", slug, "memory", "m.md"),
+			"---\nmetadata:\n  type: feedback\n---\n\n余额扣减需条件更新。\n")
+		mustWrite(t, filepath.Join(qoderHome, "projects", slug, "s.jsonl"),
+			fmt.Sprintf("{\"type\":\"workspace-directories\",\"sessionId\":\"s%d\",\"directories\":[%q]}\n", i, repo))
+	}
+	return repos[0], repos[1]
+}
+
+// TestHandoff_MergedProjectWritesEveryCheckout 回归 I4：同一 remote 的两份 checkout
+// 合并后，每份 checkout 的 AGENTS.md 都指向自己的 .agent-memory/HANDOFF.md，
+// 因此简报必须逐份生成，而不是只写 primary_path。
+func TestHandoff_MergedProjectWritesEveryCheckout(t *testing.T) {
+	home, qoderHome := isolateHomeWithRepo(t)
+	repoA, repoB := seedMergedCheckouts(t, home, qoderHome)
+
+	var out bytes.Buffer
+	if code := run(t, &out, "scan"); code != 0 {
+		t.Fatalf("scan exit %d: %s", code, out.String())
+	}
+	out.Reset()
+	if code := run(t, &out, "handoff", "--project", repoA); code != 0 {
+		t.Fatalf("handoff exit %d: %s", code, out.String())
+	}
+
+	bodyA, err := os.ReadFile(filepath.Join(repoA, ".agent-memory", "HANDOFF.md"))
+	if err != nil {
+		t.Fatalf("first checkout missing handoff: %v", err)
+	}
+	bodyB, err := os.ReadFile(filepath.Join(repoB, ".agent-memory", "HANDOFF.md"))
+	if err != nil {
+		t.Fatalf("second checkout missing handoff: %v", err)
+	}
+	if string(bodyA) != string(bodyB) {
+		t.Fatalf("checkouts got different briefs:\nA:\n%s\nB:\n%s", bodyA, bodyB)
+	}
+	if !strings.Contains(string(bodyA), "余额扣减需条件更新") {
+		t.Fatalf("brief lost project memory:\n%s", bodyA)
+	}
+	for _, repo := range []string{repoA, repoB} {
+		exclude, err := os.ReadFile(filepath.Join(repo, ".git", "info", "exclude"))
+		if err != nil {
+			t.Fatalf("exclude missing in %s: %v", repo, err)
+		}
+		if !strings.Contains(string(exclude), "/.agent-memory/") {
+			t.Fatalf("exclude in %s = %q", repo, exclude)
+		}
+	}
+}
+
+// TestIsProtectedAgentDir 锁定「绝不写 agent 原生目录」的边界：
+// 目录本身及其子孙都受保护，名字相近的兄弟目录不受影响。
+func TestIsProtectedAgentDir(t *testing.T) {
+	home, _ := isolateHomeWithRepo(t)
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{filepath.Join(home, ".qoder-cn"), true},
+		{filepath.Join(home, ".qoder-cn", "workspace"), true},
+		{filepath.Join(home, ".qoder"), true},
+		{filepath.Join(home, ".trae-cn", "workspace"), true},
+		{filepath.Join(home, ".trae", "workspace"), true},
+		{filepath.Join(home, ".workbuddy"), true},
+		{filepath.Join(home, ".config", "opencode", "workspace"), true},
+		{filepath.Join(home, ".claude", "projects"), true},
+		{filepath.Join(home, ".qoder-cn-backup"), false},
+		{filepath.Join(home, ".claude-other"), false},
+		{filepath.Join(home, "code", "demo"), false},
+	}
+	for _, tc := range cases {
+		if got := IsProtectedAgentDir(tc.path); got != tc.want {
+			t.Fatalf("IsProtectedAgentDir(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
+// TestHandoff_RefusesAgentNativeDir 覆盖 scan 的自动刷新与显式 --project 两条入口：
+// 即使项目映射落在 agent 原生目录里，也只能 warn 后跳过，不能写 .agent-memory。
+func TestHandoff_RefusesAgentNativeDir(t *testing.T) {
+	_, qoderHome := isolateHomeWithRepo(t)
+	protectedDir := filepath.Join(qoderHome, "workspace")
+	mustMkdir(t, protectedDir)
+	mustWrite(t, filepath.Join(qoderHome, "projects", "demo", "memory", "m.md"),
+		"---\nmetadata:\n  type: feedback\n---\n\n余额扣减需条件更新。\n")
+	mustWrite(t, filepath.Join(qoderHome, "projects", "demo", "s.jsonl"),
+		fmt.Sprintf("{\"type\":\"workspace-directories\",\"sessionId\":\"s1\",\"directories\":[%q]}\n", protectedDir))
+
+	var out bytes.Buffer
+	if code := run(t, &out, "scan"); code != 0 {
+		t.Fatalf("scan exit %d: %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "warn: 拒绝写入 agent 原生目录") {
+		t.Fatalf("scan should warn about the protected dir, got %q", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(protectedDir, ".agent-memory")); !os.IsNotExist(err) {
+		t.Fatalf("scan wrote into the agent native dir: %v", err)
+	}
+
+	out.Reset()
+	if code := run(t, &out, "handoff", "--project", protectedDir); code != 0 {
+		t.Fatalf("handoff into protected dir must skip with exit 0, got %d: %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "warn: 拒绝写入 agent 原生目录") {
+		t.Fatalf("handoff should warn about the protected dir, got %q", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(protectedDir, ".agent-memory")); !os.IsNotExist(err) {
+		t.Fatalf("handoff wrote into the agent native dir: %v", err)
+	}
+}
+
 func TestDoctorReportsSessionsAndCards(t *testing.T) {
 	home, qoderHome := isolateHomeWithRepo(t)
 	seedProjectWithSession(t, home, qoderHome)
