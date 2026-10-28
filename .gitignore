@@ -1,5 +1,7 @@
 /agent-memory.exe
 /agent-memory.exe~
+/agent-memory-app.exe
+/agent-memory-app.exe~
 /agent-memory
 *.test
 /.am-local/
