@@ -157,6 +157,108 @@ func TestSessionStore_PathIsStored(t *testing.T) {
 	}
 }
 
+// TestUpsertSession_ZeroTimesUseZeroSentinel 钉住零值时间的落库形态：
+// 零值 time.Time 必须写成 0（而不是 Unix 的 -62135596800），读回时还原为零值。
+func TestUpsertSession_ZeroTimesUseZeroSentinel(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+
+	sess := sampleSession("s1")
+	sess.StartedAt = time.Time{}
+	sess.UpdatedAt = time.Time{}
+	id, err := s.UpsertSession(ctx, sess)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var started, updated int64
+	if err := s.db.QueryRow(`SELECT started_at, updated_at FROM session WHERE id = ?`, id).Scan(&started, &updated); err != nil {
+		t.Fatal(err)
+	}
+	if started != 0 {
+		t.Fatalf("started_at = %d, want 0 sentinel", started)
+	}
+	if updated != 0 {
+		t.Fatalf("updated_at = %d, want 0 sentinel", updated)
+	}
+
+	got, ok, err := s.SessionByID(ctx, id)
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if !got.StartedAt.IsZero() {
+		t.Fatalf("StartedAt = %v, want zero time", got.StartedAt)
+	}
+	if !got.UpdatedAt.IsZero() {
+		t.Fatalf("UpdatedAt = %v, want zero time", got.UpdatedAt)
+	}
+}
+
+// TestUpsertSession_BackfillsStartedAtFromZeroSentinel 验证 ON CONFLICT 的 CASE：
+// 先以零值写入，再带真实时间 upsert 同一 external_id，started_at 必须被补上。
+func TestUpsertSession_BackfillsStartedAtFromZeroSentinel(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+
+	empty := sampleSession("s1")
+	empty.StartedAt = time.Time{}
+	empty.UpdatedAt = time.Time{}
+	if _, err := s.UpsertSession(ctx, empty); err != nil {
+		t.Fatal(err)
+	}
+
+	real := sampleSession("s1")
+	id, err := s.UpsertSession(ctx, real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started int64
+	if err := s.db.QueryRow(`SELECT started_at FROM session WHERE id = ?`, id).Scan(&started); err != nil {
+		t.Fatal(err)
+	}
+	if started != real.StartedAt.Unix() {
+		t.Fatalf("started_at = %d, want %d (CASE should backfill)", started, real.StartedAt.Unix())
+	}
+	got, ok, err := s.SessionByID(ctx, id)
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if !got.StartedAt.Equal(real.StartedAt) {
+		t.Fatalf("StartedAt = %v, want %v", got.StartedAt, real.StartedAt)
+	}
+}
+
+// TestReplaceEvents_ZeroTsUsesZeroSentinel 钉住零 Ts 事件的落库与读回：
+// ts 列写 0，读回零值 time.Time，使下游 IsZero 判断可靠。
+func TestReplaceEvents_ZeroTsUsesZeroSentinel(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	id, err := s.UpsertSession(ctx, sampleSession("s1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []domain.SessionEvent{
+		{Seq: 1, Role: "user", Kind: domain.KindUserText, Text: "hi"},
+	}
+	if err := s.ReplaceEvents(ctx, id, events); err != nil {
+		t.Fatal(err)
+	}
+	var ts int64
+	if err := s.db.QueryRow(`SELECT ts FROM session_event WHERE session_id = ? AND seq = 1`, id).Scan(&ts); err != nil {
+		t.Fatal(err)
+	}
+	if ts != 0 {
+		t.Fatalf("ts = %d, want 0 sentinel", ts)
+	}
+	list, err := s.EventsFor(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || !list[0].Ts.IsZero() {
+		t.Fatalf("zero ts should round-trip as zero time, got %+v", list)
+	}
+}
+
 // TestReplaceEvents_EmptyFilesStoredAsJSONArray 钉住空 Files 的落库形态：
 // 必须是 JSON 数组 []，不能是 null，否则读回方要额外兼容 null。
 func TestReplaceEvents_EmptyFilesStoredAsJSONArray(t *testing.T) {

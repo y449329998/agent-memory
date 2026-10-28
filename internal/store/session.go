@@ -11,6 +11,25 @@ import (
 	"github.com/muyi99/agent-memory/internal/domain"
 )
 
+// unixOrZero 把零值时间落成 0，与 schema 中 started_at/updated_at/ts 的
+// 「0 = 未设置」约定一致。time.Time{}.Unix() 是 -62135596800，不能直接落库，
+// 否则 SQL 里的 `= 0` 哨兵判断永远不成立。
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
+}
+
+// timeFromUnix 是 unixOrZero 的逆变换：0 还原为零值时间，
+// 让下游可以继续用 IsZero() 判断时间是否缺失。
+func timeFromUnix(sec int64) time.Time {
+	if sec == 0 {
+		return time.Time{}
+	}
+	return time.Unix(sec, 0)
+}
+
 func (s *Store) UpsertSession(ctx context.Context, sess domain.Session) (int64, error) {
 	if sess.ExternalID == "" {
 		return 0, errors.New("session external id is empty")
@@ -29,7 +48,7 @@ ON CONFLICT(agent, external_id) DO UPDATE SET
   event_count = excluded.event_count,
   path = excluded.path`,
 		sess.Agent, sess.ExternalID, sess.ProjectID, sess.Title,
-		sess.StartedAt.Unix(), sess.UpdatedAt.Unix(), sess.EventCount, sess.Path)
+		unixOrZero(sess.StartedAt), unixOrZero(sess.UpdatedAt), sess.EventCount, sess.Path)
 	if err != nil {
 		return 0, fmt.Errorf("upsert session %s/%s: %w", sess.Agent, sess.ExternalID, err)
 	}
@@ -60,8 +79,8 @@ FROM session WHERE id = ?`, id).Scan(
 	if err != nil {
 		return domain.Session{}, false, err
 	}
-	sess.StartedAt = time.Unix(started, 0)
-	sess.UpdatedAt = time.Unix(updated, 0)
+	sess.StartedAt = timeFromUnix(started)
+	sess.UpdatedAt = timeFromUnix(updated)
 	return sess, true, nil
 }
 
@@ -90,7 +109,7 @@ func (s *Store) ReplaceEvents(ctx context.Context, sessionID int64, events []dom
 		if _, err := tx.ExecContext(ctx, `
 INSERT INTO session_event(session_id, seq, role, kind, text, tool, files_json, ts)
 VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
-			sessionID, i+1, e.Role, string(e.Kind), e.Text, e.Tool, string(raw), e.Ts.Unix()); err != nil {
+			sessionID, i+1, e.Role, string(e.Kind), e.Text, e.Tool, string(raw), unixOrZero(e.Ts)); err != nil {
 			return fmt.Errorf("insert event %d: %w", i+1, err)
 		}
 	}
@@ -117,7 +136,7 @@ FROM session_event WHERE session_id = ? ORDER BY seq`, sessionID)
 			return nil, err
 		}
 		e.Kind = domain.EventKind(kind)
-		e.Ts = time.Unix(ts, 0)
+		e.Ts = timeFromUnix(ts)
 		if filesStr != "" && filesStr != "[]" {
 			if err := json.Unmarshal([]byte(filesStr), &e.Files); err != nil {
 				return nil, fmt.Errorf("event %d files_json: %w", e.ID, err)
