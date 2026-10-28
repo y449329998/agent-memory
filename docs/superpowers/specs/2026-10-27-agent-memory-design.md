@@ -102,7 +102,7 @@ agent 学到新记忆 → MCP memory_add → Store → 下次合成生效
 | `project_path` | project_id, agent, path, slug | 各 agent 的 slug/路径 → 同一 project |
 | `source` | agent, kind(memory/session), path, content_hash, mtime, size, last_error, updated_at | 增量扫描游标与失败现场 |
 | `memory_item` | project_id(0=用户级), scope, type, text, text_norm_hash, stale, first_seen_at, last_seen_at, embedding(BLOB,可空), embed_model, embed_dim, embedded_at | 归并后的记忆条目 |
-| `memory_source` | memory_id, agent, ref, quote | 一条记忆的多来源证据 |
+| `memory_source` | memory_id, agent, path, quote | 一条记忆的多来源证据 |
 | `session` | agent, external_id, project_id, title, started_at, updated_at, event_count, path | 会话索引 |
 | `session_event` | session_id, seq, role, kind, text(截断 500 字), tool, files_json, ts | 抽取信号，不存完整 transcript |
 | `task_card` | session_id, project_id, goal, status, decisions_json, files_json, commands_json, errors_json, open_questions, next_steps, confidence, generated_by, created_at, updated_at | 交接最小单元 |
@@ -143,7 +143,7 @@ Qoder 的 slug（如 `E--company-nuonuo-fresh3-api`）不能靠字符替换反�
 
 向量能力本期只落地三件事，保证 M5 接上时不改表、不改调用方：
 
-1. **字段**：`embedding` 存 float32 小端字节序列，`embed_model` 与 `embed_dim` 记录来源模型与维度，`embedded_at` 记录计算时间。三者均可空，空即未嵌入。
+1. **字段**：`embedding` 存 float32 小端字节序列；`embed_model`、`embed_dim`、`embedded_at` 三列是 `NOT NULL DEFAULT ''/0/0`，用空串与 0 表示「未嵌入」——不用 NULL，避免唯一索引与比较里出现 NULL 语义。
 2. **失效判定**：`(text_norm_hash, embed_model)` 组成 embedding 的 validity key；文本变化或模型变化即视为过期，M5 的回填命令按此筛选，不做全表重算。
 3. **接口**：`SearchProvider` 定义 `Search(ctx, Query) ([]Hit, error)`，`Hit` 含 `score` 与 `source(fts|vector|hybrid)`；`Embedder` 定义 `Embed(ctx, texts []string) ([][]float32, error)` 并返回模型标识。本期只有 `ftsProvider` 一个实现。
 
