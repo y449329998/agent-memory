@@ -1327,6 +1327,11 @@ git commit -m "feat: SQLite 存储底座与全量建表"
 
 `project_path.path` 存的是 `normalize.ProjectKey("", rawPath)` 的结果（小写、正斜杠、去尾分隔符），查表时先归一化再比；`project.primary_path` 存可展示的原始路径。这样同一个仓库在 Qoder 与 WorkBuddy 里的两种写法能命中同一行。
 
+> **实施时补充的三条规则**（原代码块未覆盖，已在实现中落地并加了测试）：
+> 1. `ssh://git@host/...` 剥掉 scheme 后会残留 `git@`，scp 正则要求冒号匹配不上 → 必须先剥 userinfo。否则该形式得到 `git@host/a/b`，与 `https://host/a/b` 不合并。
+> 2. authority 里的端口统一去掉（`host:2222/a/b` → `host/a/b`），IPv6 保留方括号（`[::1]:8443` → `[::1]`）。不去端口会让 `ssh://host:2222/a/b` 与 `https://host/2222/a/b` 撞成同一个 key——那是把两个项目的记忆混在一起。
+> 3. scp 的冒号切分只在原串**没有** scheme 时生效；否则 `ssh://host:2222/...` 的端口会被当成路径段。另外 `keyFromPath` 在 `filepath.ToSlash` 后补一次反斜杠替换，去尾斜杠加 `len > 1` 守卫，避免 `/` 变成空 key。
+
 **Files:**
 - Create: `internal/store/project.go`
 - Test: `internal/store/project_test.go`
