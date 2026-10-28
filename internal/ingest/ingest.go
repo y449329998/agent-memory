@@ -63,11 +63,12 @@ func ValidateAgent(known []string, want string) error {
 // （ctx 取消、库不可用）。
 func (r *Runner) Run(ctx context.Context, onlyAgent string) (Result, error) {
 	var res Result
+	// runAt 只是「轮次序号」，可能因单调递增而超前墙钟；所有时间戳单独取墙钟。
 	runAt, err := r.runMarker(ctx)
 	if err != nil {
 		return res, err
 	}
-	at := time.Unix(runAt, 0)
+	at := time.Now().Truncate(time.Second)
 
 	var scanned []string
 	for _, a := range r.adapters {
@@ -94,7 +95,7 @@ func (r *Runner) Run(ctx context.Context, onlyAgent string) (Result, error) {
 
 			if u.Err != nil {
 				res.Errors = append(res.Errors, fmt.Sprintf("%s: %v", u.Path, u.Err))
-				if err := r.store.MarkSourceError(ctx, a.Name(), "memory", u.Path, u.Err.Error(), runAt); err != nil {
+				if err := r.store.MarkSourceError(ctx, a.Name(), "memory", u.Path, u.Err.Error(), at.Unix()); err != nil {
 					return res, err
 				}
 				continue
@@ -121,10 +122,12 @@ func (r *Runner) Run(ctx context.Context, onlyAgent string) (Result, error) {
 				continue
 			}
 
+			failed := false
 			for _, d := range u.Drafts {
 				_, created, err := r.store.UpsertMemory(ctx, projectID, d, at)
 				if err != nil {
 					res.Errors = append(res.Errors, fmt.Sprintf("%s: %v", u.Path, err))
+					failed = true
 					continue
 				}
 				if created {
@@ -132,6 +135,10 @@ func (r *Runner) Run(ctx context.Context, onlyAgent string) (Result, error) {
 				} else {
 					res.Merged++
 				}
+			}
+			if failed {
+				// 不推进源哈希：否则下一轮判 Unchanged，这条记忆永远不再重试
+				continue
 			}
 
 			if err := r.store.PutSource(ctx, domain.SourceState{
@@ -155,6 +162,9 @@ func (r *Runner) Run(ctx context.Context, onlyAgent string) (Result, error) {
 // runMarker 生成本轮的唯一标记。last_seen_run 的语义是「哪一轮见过」，不是墙上时间：
 // Unix 秒精度下同一秒内连跑两次会拿到同一个值，stale 判定就会把上一轮的来源
 // 当成「本轮见过」，源文件消失后永远标不出过时。因此标记必须严格递增。
+//
+// 注意：它只保证单调递增，可能超前墙钟（同一秒内连跑 30 轮就会超前 30 秒），
+// 绝不能当时间戳使用；first_seen_at / changed_at / project.updated_at 等一律另取墙钟。
 func (r *Runner) runMarker(ctx context.Context) (int64, error) {
 	now := time.Now().Unix()
 	maxSeen, err := r.store.QueryInt(ctx, `SELECT COALESCE(MAX(last_seen_run), 0) FROM source`)

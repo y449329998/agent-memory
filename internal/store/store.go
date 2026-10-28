@@ -33,9 +33,13 @@ var dsnEscaper = strings.NewReplacer("%", "%25", "?", "%3F", "#", "%23")
 // sqliteDSN 把数据库路径包装为带连接级 PRAGMA 的 SQLite URI。
 // foreign_keys 与 busy_timeout 是连接级设置，随 DSN 下发才能保证
 // 连接池重建连接后仍然生效（否则外键级联删除会静默失效）。
+//
+// _txlock=immediate 让 BeginTx 直接 BEGIN IMMEDIATE 排队拿写锁。默认的 deferred
+// 事务「先读后写」时，如果另一个进程（daemon 与 CLI 各开一个 Store）已经拿到写锁，
+// 快照升级会立即返回 SQLITE_BUSY——busy_timeout 只对拿锁等待生效，救不了升级冲突。
 func sqliteDSN(path string) string {
 	return "file:" + dsnEscaper.Replace(filepath.ToSlash(path)) +
-		"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)"
+		"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate"
 }
 
 func Open(path string) (*Store, error) {

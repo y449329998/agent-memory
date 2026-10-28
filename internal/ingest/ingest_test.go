@@ -8,9 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/muyi99/agent-memory/internal/agent"
 	"github.com/muyi99/agent-memory/internal/agent/qoder"
+	"github.com/muyi99/agent-memory/internal/domain"
 	"github.com/muyi99/agent-memory/internal/store"
 )
 
@@ -245,6 +247,86 @@ func TestRun_RecordsSourceErrorAndKeepsOthers(t *testing.T) {
 	}
 	if got := mustInt(t, s, `SELECT count(*) FROM source WHERE last_error <> ''`); got == 0 {
 		t.Fatal("source last_error not persisted")
+	}
+}
+
+// badDraftAdapter 返回一个解析成功但草稿为空的 unit，用来验证 UpsertMemory 失败时
+// 不能推进源哈希——否则下一轮会判 Unchanged，这条记忆永远不再重试。
+type badDraftAdapter struct{}
+
+func (badDraftAdapter) Name() string { return "qoder" }
+
+func (badDraftAdapter) ScanMemoryUnits(ctx context.Context) ([]agent.MemoryUnit, error) {
+	const path = "/virtual/empty.md"
+	return []agent.MemoryUnit{{
+		Path:    path,
+		Content: []byte("x"),
+		Drafts: []domain.MemoryDraft{{
+			Scope:       domain.ScopeUser,
+			Type:        domain.TypeFact,
+			Text:        "   ",
+			SourceAgent: "qoder",
+			SourcePath:  path,
+		}},
+	}}, nil
+}
+
+func TestRun_DraftFailureDoesNotAdvanceSourceHash(t *testing.T) {
+	s := openTempStore(t)
+	r := New(s, badDraftAdapter{})
+	for i := 0; i < 2; i++ {
+		res, err := r.Run(context.Background(), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Errors) == 0 {
+			t.Fatalf("run %d: empty draft must be reported as an error", i+1)
+		}
+		if res.Created != 0 {
+			t.Fatalf("run %d: created = %d, want 0", i+1, res.Created)
+		}
+		if _, seen, err := s.SourceHash(context.Background(), "qoder", "memory", "/virtual/empty.md"); err != nil {
+			t.Fatal(err)
+		} else if seen {
+			t.Fatalf("run %d: source hash advanced despite upsert failure; next run would skip the retry", i+1)
+		}
+	}
+}
+
+// TestRun_TimestampsUseWallClockNotRunMarker 回归轮次标记与时间戳混用：
+// 同一秒内连跑 3 轮，runMarker 会给到 now+1、now+2，但 first_seen_at / changed_at
+// 必须来自墙钟，不得落在未来；last_seen_run 仍须严格递增。
+func TestRun_TimestampsUseWallClockNotRunMarker(t *testing.T) {
+	home, _, _ := fakeQoder(t)
+	s := openTempStore(t)
+	r := New(s, qoder.New(home))
+	user := filepath.Join(home, "memory", "user.md")
+
+	var seenRuns []int
+	for i := 1; i <= 3; i++ {
+		// 每轮都改内容：迫使这轮写入新条目（first_seen_at）并记录 changed_at
+		write(t, user, fmt.Sprintf("---\nmetadata:\n  type: user\n---\n\n第 %d 轮的墙钟内容。\n", i))
+		if _, err := r.Run(context.Background(), ""); err != nil {
+			t.Fatal(err)
+		}
+		seenRuns = append(seenRuns, mustInt(t, s,
+			`SELECT last_seen_run FROM source WHERE agent = 'qoder' AND kind = 'memory' AND path = ?`, user))
+	}
+	wall := time.Now().Unix()
+	if seenRuns[0] >= seenRuns[1] || seenRuns[1] >= seenRuns[2] {
+		t.Fatalf("last_seen_run must strictly increase, got %v", seenRuns)
+	}
+
+	firstSeen := int64(mustInt(t, s, `SELECT MAX(first_seen_at) FROM memory_item`))
+	changedAt := int64(mustInt(t, s,
+		`SELECT MAX(changed_at) FROM source WHERE agent = 'qoder' AND path = ?`, user))
+	t.Logf("run3: last_seen_run=%d first_seen_at=%d changed_at=%d wall=%d",
+		seenRuns[2], firstSeen, changedAt, wall)
+	if firstSeen > wall+1 {
+		t.Fatalf("first_seen_at = %d is in the future (wall=%d)", firstSeen, wall)
+	}
+	if changedAt > wall+1 {
+		t.Fatalf("changed_at = %d is in the future (wall=%d)", changedAt, wall)
 	}
 }
 

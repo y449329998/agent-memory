@@ -235,6 +235,8 @@ func (s *Store) ListMemories(ctx context.Context, projectID int64, includeStale 
 // MarkStaleForRun 把「所有支撑来源都属于本轮扫过的 agent、且本轮一条都没再见到」的条目置为过时。
 // 共同支撑的条目只要有一个来源本轮见过就保持新鲜；来源属于未扫描 agent 的条目一律不动——
 // 那些 agent 这一轮根本没看，不能把「没看」当成「不见了」。
+// 「本轮见过」用 >= 判定：两个进程同时扫描时，旧轮次收尾不能把新轮次刚 touch 的源
+// 当成没见到。
 // 不硬删——agent 重写记忆文件时常常只是换措辞，直接删会把结论抹掉。
 func (s *Store) MarkStaleForRun(ctx context.Context, agents []string, runAt int64) (int, error) {
 	if len(agents) == 0 {
@@ -259,7 +261,7 @@ WHERE stale = 0
   AND NOT EXISTS (
     SELECT 1 FROM memory_source ms
     JOIN source s ON s.agent = ms.agent AND s.path = ms.path
-    WHERE ms.memory_id = memory_item.id AND ms.agent IN (`+ph+`) AND s.last_seen_run = ?)`,
+    WHERE ms.memory_id = memory_item.id AND ms.agent IN (`+ph+`) AND s.last_seen_run >= ?)`,
 		args...)
 	if err != nil {
 		return 0, err

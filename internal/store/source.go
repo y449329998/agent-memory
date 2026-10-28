@@ -11,7 +11,8 @@ import (
 )
 
 // PutSource 记录一个源文件的当前状态。哈希变化时把旧哈希留在 prev_hash，
-// 并把 changed_at 置成本轮时间——doctor 用它回答「这个文件什么时候变过」。
+// 并把 changed_at 置成墙钟时间——doctor 用它回答「这个文件什么时候变过」。
+// runAt 是轮次序号，可能因单调递增而超前墙钟，只能写进 last_seen_run，不能当时间戳。
 // 同一份内容重复写入（重扫、重启）不会记为变更；首次入库没有旧哈希可对照，
 // 因此 changed_at 保持 0。成功写入同时清空 last_error。
 func (s *Store) PutSource(ctx context.Context, st domain.SourceState, runAt int64) error {
@@ -19,6 +20,7 @@ func (s *Store) PutSource(ctx context.Context, st domain.SourceState, runAt int6
 	if !st.MTime.IsZero() {
 		mtime = st.MTime.Unix()
 	}
+	now := time.Now().Unix()
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO source(agent, kind, path, content_hash, prev_hash, changed_at, mtime, size, last_seen_run, updated_at, last_error)
 VALUES(?, ?, ?, ?, '', 0, ?, ?, ?, ?, '')
@@ -31,7 +33,7 @@ ON CONFLICT(agent, kind, path) DO UPDATE SET
   last_seen_run = excluded.last_seen_run,
   updated_at = excluded.updated_at,
   last_error = ''`,
-		st.Agent, st.Kind, st.Path, st.ContentHash, mtime, st.Size, runAt, time.Now().Unix(), runAt)
+		st.Agent, st.Kind, st.Path, st.ContentHash, mtime, st.Size, runAt, now, now)
 	if err != nil {
 		return fmt.Errorf("put source %s:%s: %w", st.Agent, st.Path, err)
 	}

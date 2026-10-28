@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -328,14 +329,27 @@ func TestMarkStaleForRun_LeavesSharedItemAloneWhenUnscannedAgentStillSupports(t 
 	}
 }
 
-// TestUpsertMemory_ConcurrentSameTextMergesWithoutError 锁住 UpsertMemory 的原子性：
-// SELECT → INSERT → FTS → source 四步必须在同一事务里，否则并发同文本会撞唯一索引。
-// 单连接下并发天然串行，断言只依赖最终状态，不依赖时序。
-func TestUpsertMemory_ConcurrentSameTextMergesWithoutError(t *testing.T) {
-	s := openStore(t)
+// TestUpsertMemory_ConcurrentAcrossTwoStores 锁住跨进程并发写：两个 Store 各持一条连接
+// 打开同一个库（等价于 daemon 在扫、另一个 CLI 在写），8 个 goroutine 写同一条文本。
+//
+// 单连接场景被连接池天然串行化，抓不到问题；deferred 事务「先读后写」时，另一个进程
+// 已经拿到写锁，升级事务会直接 SQLITE_BUSY（busy_timeout 对快照升级无效），
+// 因此 DSN 必须用 _txlock=immediate 让 BEGIN 就排队拿写锁。
+func TestUpsertMemory_ConcurrentAcrossTwoStores(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	stores := make([]*Store, 2)
+	for i := range stores {
+		s, err := Open(path)
+		if err != nil {
+			t.Fatalf("open store #%d: %v", i, err)
+		}
+		t.Cleanup(func() { s.Close() })
+		stores[i] = s
+	}
 	ctx := context.Background()
 	now := time.Unix(1700000000, 0)
-	const n = 8
+	const perStore = 4
+	const n = 2 * perStore
 
 	var wg sync.WaitGroup
 	ids := make([]int64, n)
@@ -345,36 +359,72 @@ func TestUpsertMemory_ConcurrentSameTextMergesWithoutError(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			ids[i], created[i], errs[i] = s.UpsertMemory(ctx, 0,
-				draft(fmt.Sprintf("agent%d", i), fmt.Sprintf("/m/%d.md", i), "并发写入的同一条文本"), now)
+			ids[i], created[i], errs[i] = stores[i%2].UpsertMemory(ctx, 0,
+				draft(fmt.Sprintf("agent%d", i), fmt.Sprintf("/m/%d.md", i), "两个连接并发写入的同一条文本"), now)
 		}(i)
 	}
 	wg.Wait()
 
 	winners := 0
+	failed := 0
 	for i := 0; i < n; i++ {
 		if errs[i] != nil {
-			t.Fatalf("goroutine %d: %v", i, errs[i])
+			t.Errorf("goroutine %d (store %d): %v", i, i%2, errs[i])
+			failed++
+			continue
 		}
 		if ids[i] != ids[0] {
-			t.Fatalf("goroutine %d got id %d, want %d", i, ids[i], ids[0])
+			t.Errorf("goroutine %d got id %d, want %d", i, ids[i], ids[0])
 		}
 		if created[i] {
 			winners++
 		}
 	}
+	if failed > 0 {
+		t.Fatalf("%d/%d concurrent upserts failed", failed, n)
+	}
 	if winners != 1 {
 		t.Fatalf("exactly one upsert should create the row, got %d", winners)
 	}
-	if got := rowCount(t, s, `SELECT count(*) FROM memory_item`); got != 1 {
+	if got := rowCount(t, stores[0], `SELECT count(*) FROM memory_item`); got != 1 {
 		t.Fatalf("memory_item = %d, want 1", got)
 	}
-	if got := rowCount(t, s, `SELECT count(*) FROM memory_source WHERE memory_id = ?`, ids[0]); got != n {
+	if got := rowCount(t, stores[0], `SELECT count(*) FROM memory_source WHERE memory_id = ?`, ids[0]); got != n {
 		t.Fatalf("memory_source = %d, want %d", got, n)
 	}
-	if got := rowCount(t, s, `SELECT count(*) FROM memory_fts WHERE rowid = ?`, ids[0]); got != 1 {
+	if got := rowCount(t, stores[0], `SELECT count(*) FROM memory_fts WHERE rowid = ?`, ids[0]); got != 1 {
 		t.Fatalf("memory_fts = %d, want 1", got)
 	}
+}
+
+// TestMarkStaleForRun_OlderRunMarkerDoesNotHideNewerTouch 回归两个进程同时扫描：
+// 旧轮次（runAt 更小）收尾时，另一个进程已经用更新的轮次 touch 过源。
+// 「本轮见过」必须用 >= 判定，否则旧轮次会把新轮次刚见过的源当成没见到。
+func TestMarkStaleForRun_OlderRunMarkerDoesNotHideNewerTouch(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	older := time.Unix(1700000000, 0)
+	newer := older.Add(time.Minute)
+
+	id, _, err := s.UpsertMemory(ctx, 0, draft("qoder", `/q/a.md`, "两个进程同时扫描的条目"), older)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutSource(ctx, domain.SourceState{Agent: "qoder", Kind: "memory", Path: "/q/a.md", ContentHash: "h1"}, older.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.TouchSource(ctx, "qoder", "memory", "/q/a.md", newer.Unix()); err != nil {
+		t.Fatal(err)
+	}
+
+	staled, err := s.MarkStaleForRun(ctx, []string{"qoder"}, older.Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if staled != 0 {
+		t.Fatalf("older run must not stale a source touched by a newer run, staled %d", staled)
+	}
+	assertStale(t, s, id, false)
 }
 
 func TestPurgeStale_RemovesFTSRowAndSources(t *testing.T) {

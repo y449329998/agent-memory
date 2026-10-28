@@ -37,10 +37,12 @@ func TestPutSource_RecordsHashAndDetectsChange(t *testing.T) {
 		t.Fatalf("unchanged rescan should not record change, got %d", changed)
 	}
 
-	// 内容变化：prev_hash 记下旧哈希，changed_at 记下时间
+	// 内容变化：prev_hash 记下旧哈希，changed_at 记墙钟时间（runAt 只是轮次序号）
+	before := time.Now().Unix()
 	if err := s.PutSource(ctx, st("h2"), run2.Unix()); err != nil {
 		t.Fatal(err)
 	}
+	after := time.Now().Unix()
 	row, err := s.GetSource(ctx, "qoder", "memory", "/q/a.md")
 	if err != nil {
 		t.Fatal(err)
@@ -48,8 +50,11 @@ func TestPutSource_RecordsHashAndDetectsChange(t *testing.T) {
 	if row.ContentHash != "h2" || row.PrevHash != "h1" {
 		t.Fatalf("hash history wrong: %+v", row)
 	}
-	if !row.ChangedAt.Equal(run2) {
-		t.Fatalf("changed_at = %v want %v", row.ChangedAt, run2)
+	if got := row.ChangedAt.Unix(); got < before || got > after {
+		t.Fatalf("changed_at = %d, want wall clock in [%d, %d]", got, before, after)
+	}
+	if row.LastSeenRun != run2.Unix() {
+		t.Fatalf("last_seen_run = %d, want runAt %d", row.LastSeenRun, run2.Unix())
 	}
 	if row.LastError != "" {
 		t.Fatalf("successful put should clear last_error, got %q", row.LastError)
