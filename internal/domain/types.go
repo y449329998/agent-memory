@@ -122,15 +122,17 @@ type SourceState struct {
 	Size        int64
 }
 
+// Stats 的 json tag 同时服务 `stats --json` 与 /v1/stats：
+// 小写键是 CLI 输出契约，json.Unmarshal 也能按 tag 回填到本结构。
 type Stats struct {
-	Projects        int
-	Memories        int
-	Stale           int
-	Sources         int
-	FailedSource    int
-	Changed         int
-	MemoriesByAgent map[string]int
-	MemoriesByType  map[string]int
+	Projects        int            `json:"projects"`
+	Memories        int            `json:"memories"`
+	Stale           int            `json:"stale"`
+	Sources         int            `json:"sources"`
+	FailedSource    int            `json:"failed_source"`
+	Changed         int            `json:"changed"`
+	MemoriesByAgent map[string]int `json:"memories_by_agent"`
+	MemoriesByType  map[string]int `json:"memories_by_type"`
 }
 
 // Session 是一个已入库的会话。ProjectPath/ProjectSlug/Confidence 由适配器给出，

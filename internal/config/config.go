@@ -61,6 +61,11 @@ func ConfigPath(userHome string) string {
 
 func (c Config) DBPath() string { return filepath.Join(c.DataDir, "memory.db") }
 
+// TokenPath / PortPath 是 serve 与 stdio 桥之间约定的运行期文件。
+// 放在 DataDir 下：配置改了数据目录，令牌与端口也必须跟着走。
+func (c Config) TokenPath() string { return filepath.Join(c.DataDir, "token") }
+func (c Config) PortPath() string  { return filepath.Join(c.DataDir, "port") }
+
 // QoderHome 返回 Qoder 配置根；显式配置优先，其次自动发现，禁用时返回空串。
 func (c Config) QoderHome() string {
 	if c.Qoder.Disabled {

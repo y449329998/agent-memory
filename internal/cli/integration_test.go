@@ -61,6 +61,14 @@ func run(t *testing.T, out *bytes.Buffer, args ...string) int {
 	return code
 }
 
+// runIn 与 run 相同，用于 stdin 敏感的子命令（mcp）。
+// 缺 port 文件时 cmdMCP 在接触 stdin 之前就会失败，所以这里不需要注入输入流；
+// 单独留一个名字，是为了让测试表达「即使没给 stdin 也不能挂住」。
+func runIn(t *testing.T, out *bytes.Buffer, args ...string) int {
+	t.Helper()
+	return run(t, out, args...)
+}
+
 func TestEndToEnd_InitScanSearchAddDoctor(t *testing.T) {
 	home, _, repo := isolateHome(t)
 	var out bytes.Buffer

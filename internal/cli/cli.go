@@ -38,6 +38,21 @@ func openEnv() (*env, error) {
 	return &env{cfg: cfg, userHome: home, st: st}, nil
 }
 
+// loadConfigEnv 只解析配置，不打开共享库。
+// link/unlink/mcp 只读写 agent 配置或运行期文件，不该顺手建出 memory.db：
+// link --dry-run 承诺一个字节都不写，而 store.Open 会创建库文件与表结构。
+func loadConfigEnv() (*env, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("cannot resolve user home: %w", err)
+	}
+	cfg, err := config.Load(config.ConfigPath(home), home)
+	if err != nil {
+		return nil, err
+	}
+	return &env{cfg: cfg, userHome: home}, nil
+}
+
 // buildAdapters 把配置翻译成启用的适配器列表。
 // 新增 agent 时只改这里：其余层都通过 agent.Adapter 接口工作。
 func buildAdapters(cfg config.Config) []agent.Adapter {
