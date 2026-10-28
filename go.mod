@@ -3,6 +3,7 @@ module github.com/muyi99/agent-memory
 go 1.22
 
 require (
+	github.com/BurntSushi/toml v1.3.2
 	golang.org/x/text v0.16.0
 	modernc.org/sqlite v1.34.4
 )
