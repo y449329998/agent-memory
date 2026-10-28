@@ -1,0 +1,284 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/muyi99/agent-memory/internal/domain"
+	"github.com/muyi99/agent-memory/internal/normalize"
+)
+
+// UpsertMemory 写入或合并一条记忆。返回 (id, created, err)。
+//
+// 合并条件是全字段命中唯一索引 (scope, project_id, type, text_norm_hash)：
+// 命中时不复制文本，只追加来源并把条目恢复为新鲜。projectID 为 0 表示用户级。
+// 适配器只报原文，归一化与哈希都在这层做，保证不同 agent 的排版差异不影响去重。
+//
+// 入库文本、text_norm_hash 与 FTS 行三者同源于 canon：先归一化再各自派生，
+// 否则会出现「检索命中但内容对不上」。
+func (s *Store) UpsertMemory(ctx context.Context, projectID int64, d domain.MemoryDraft, at time.Time) (int64, bool, error) {
+	canon := normalize.CanonicalText(d.Text)
+	if canon == "" {
+		return 0, false, domain.ErrEmptyMemory
+	}
+	hash := normalize.Hash(canon)
+	now := at.Unix()
+	scope := string(d.Scope)
+	if scope == "" {
+		scope = string(domain.ScopeUser)
+	}
+	typ := string(d.Type)
+	if typ == "" {
+		typ = string(domain.TypeFact)
+	}
+
+	var id int64
+	err := s.db.QueryRowContext(ctx, `
+SELECT id FROM memory_item
+WHERE scope = ? AND project_id = ? AND type = ? AND text_norm_hash = ?`,
+		scope, projectID, typ, hash).Scan(&id)
+
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		res, err := s.db.ExecContext(ctx, `
+INSERT INTO memory_item(scope, project_id, type, text, text_norm_hash, stale, first_seen_at, last_seen_at)
+VALUES(?, ?, ?, ?, ?, 0, ?, ?)`,
+			scope, projectID, typ, canon, hash, now, now)
+		if err != nil {
+			return 0, false, fmt.Errorf("insert memory: %w", err)
+		}
+		id, err = res.LastInsertId()
+		if err != nil {
+			return 0, false, err
+		}
+		if _, err := s.db.ExecContext(ctx,
+			`INSERT INTO memory_fts(rowid, text_seg) VALUES(?, ?)`,
+			id, strings.Join(normalize.Segment(canon), " ")); err != nil {
+			return 0, false, fmt.Errorf("index memory %d: %w", id, err)
+		}
+		if err := s.addSource(ctx, id, d); err != nil {
+			return 0, false, err
+		}
+		return id, true, nil
+	case err != nil:
+		return 0, false, err
+	default:
+		if _, err := s.db.ExecContext(ctx,
+			`UPDATE memory_item SET last_seen_at = ?, stale = 0 WHERE id = ?`, now, id); err != nil {
+			return 0, false, err
+		}
+		if err := s.addSource(ctx, id, d); err != nil {
+			return 0, false, err
+		}
+		return id, false, nil
+	}
+}
+
+// addSource 幂等登记来源：同一 (memory_id, agent, path) 只保留一行，
+// 重复见到时刷新 quote 而不是插入重复来源。
+func (s *Store) addSource(ctx context.Context, memoryID int64, d domain.MemoryDraft) error {
+	agent := d.SourceAgent
+	if agent == "" {
+		agent = "mcp"
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO memory_source(memory_id, agent, path, quote)
+VALUES(?, ?, ?, ?)
+ON CONFLICT(memory_id, agent, path) DO UPDATE SET quote = excluded.quote`,
+		memoryID, agent, d.SourcePath, truncate(d.Quote, 400))
+	if err != nil {
+		return fmt.Errorf("add source for memory %d: %w", memoryID, err)
+	}
+	return nil
+}
+
+// truncate 按 rune 截断，避免把 UTF-8 字符切成半个。
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+func (s *Store) MemoryByID(ctx context.Context, id int64) (domain.MemoryItem, error) {
+	var (
+		m           domain.MemoryItem
+		stale       int
+		first, last int64
+		embeddedAt  int64
+	)
+	err := s.db.QueryRowContext(ctx, `
+SELECT id, scope, project_id, type, text, text_norm_hash, stale, first_seen_at, last_seen_at, embed_model, embed_dim, embedded_at
+FROM memory_item WHERE id = ?`, id).Scan(
+		&m.ID, &m.Scope, &m.ProjectID, &m.Type, &m.Text, &m.TextNormHash, &stale, &first, &last,
+		&m.EmbedModel, &m.EmbedDim, &embeddedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.MemoryItem{}, domain.ErrMemoryNotFound
+	}
+	if err != nil {
+		return domain.MemoryItem{}, err
+	}
+	m.Stale = stale != 0
+	m.FirstSeenAt = time.Unix(first, 0)
+	m.LastSeenAt = time.Unix(last, 0)
+	if embeddedAt != 0 {
+		m.EmbeddedAt = time.Unix(embeddedAt, 0)
+	}
+	sources, err := s.sourcesFor(ctx, id)
+	if err != nil {
+		return domain.MemoryItem{}, err
+	}
+	m.Sources = sources
+	return m, nil
+}
+
+func (s *Store) sourcesFor(ctx context.Context, memoryID int64) ([]domain.MemorySource, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT memory_id, agent, path, quote FROM memory_source WHERE memory_id = ? ORDER BY agent, path`, memoryID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.MemorySource
+	for rows.Next() {
+		var ms domain.MemorySource
+		if err := rows.Scan(&ms.MemoryID, &ms.Agent, &ms.Path, &ms.Quote); err != nil {
+			return nil, err
+		}
+		out = append(out, ms)
+	}
+	return out, rows.Err()
+}
+
+// ListMemories 按项目列条目。projectID 为 0 时只列用户级；大于 0 时同时带出用户级，
+// 因为交接简报需要「全局偏好 + 本项目约束」两部分。
+//
+// 连接数固定为 1：先把 id 收成切片并关闭 rows，再逐条 MemoryByID，
+// 不能边遍历边查询（会等不到空闲连接而静默挂起）。
+func (s *Store) ListMemories(ctx context.Context, projectID int64, includeStale bool, limit int) ([]domain.MemoryItem, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	q := `SELECT id FROM memory_item WHERE 1=1`
+	args := []any{}
+	if projectID == 0 {
+		q += ` AND scope = ?`
+		args = append(args, string(domain.ScopeUser))
+	} else {
+		q += ` AND (project_id = ? OR scope = ?)`
+		args = append(args, projectID, string(domain.ScopeUser))
+	}
+	if !includeStale {
+		q += ` AND stale = 0`
+	}
+	q += ` ORDER BY type, last_seen_at DESC, id LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// 显式关闭，保证后续逐条查询能拿到唯一那条连接。
+	rows.Close()
+
+	out := make([]domain.MemoryItem, 0, len(ids))
+	for _, id := range ids {
+		m, err := s.MemoryByID(ctx, id)
+		if errors.Is(err, domain.ErrMemoryNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, nil
+}
+
+// MarkStaleExcept 把该 agent 本轮没有再见到的记忆置为过时。
+// 只在该 agent 支撑过的条目里判定：别的 agent 或 MCP 写入的条目不受影响。
+// 不硬删——agent 重写记忆文件时常常只是换措辞，直接删会把结论抹掉。
+func (s *Store) MarkStaleExcept(ctx context.Context, agent string, runAt int64) (int, error) {
+	res, err := s.db.ExecContext(ctx, `
+UPDATE memory_item SET stale = 1
+WHERE stale = 0
+  AND id IN (SELECT memory_id FROM memory_source WHERE agent = ?)
+  AND id NOT IN (
+    SELECT ms.memory_id
+    FROM memory_source ms
+    JOIN source s ON s.agent = ms.agent AND s.path = ms.path
+    WHERE ms.agent = ? AND s.last_seen_run = ?
+  )`, agent, agent, runAt)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
+// PurgeStale 真删所有过时条目，并清掉 FTS 行与来源行。
+// memory_fts 是独立虚表，外键级联管不到它，必须显式删除；三者同一事务。
+func (s *Store) PurgeStale(ctx context.Context) (int, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM memory_item WHERE stale = 1`)
+	if err != nil {
+		return 0, err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM memory_fts WHERE rowid = ?`, id); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM memory_source WHERE memory_id = ?`, id); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM memory_item WHERE id = ?`, id); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return len(ids), nil
+}

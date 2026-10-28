@@ -12,9 +12,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// ErrEmptyMemory 拒绝把空白内容写成记忆条目。
-var ErrEmptyMemory = errors.New("memory text is empty")
-
 // Store 持有唯一的 *sql.DB。全项目只有这个包读写数据库。
 //
 // 连接数固定为 1：SQLite 的写是串行的，单连接天然避免了 SQLITE_BUSY，

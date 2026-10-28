@@ -2,7 +2,15 @@ package domain
 
 import (
 	"context"
+	"errors"
 	"time"
+)
+
+var (
+	// ErrMemoryNotFound 表示按 id 取记忆时目标不存在（含已被清理）。
+	ErrMemoryNotFound = errors.New("memory not found")
+	// ErrEmptyMemory 拒绝把空白内容写成记忆条目。
+	ErrEmptyMemory = errors.New("memory text is empty")
 )
 
 type Scope string
