@@ -179,7 +179,7 @@ Composer 是纯函数：输入 store 快照 + project_key，输出 markdown。�
 5. 未决问题汇总
 6. 可用 MCP tools 提示
 
-预算默认 1500 token（约 2500 中文字符）。超限按优先级裁剪：任务卡细节 → 旧任务卡 → 未决问题截断；第 2、3 段不参与裁剪。排序规则固定为 `type` → `last_seen_at desc` → `id`，保证同输入同输出。
+预算默认 4000 token（实测真实项目：11 条全局偏好 + 项目约束约 2.3k token，六节全量约 3.5k；1500 会把任务卡整段裁掉，反而违背「不用从头描述任务」的初衷）。超限按优先级裁剪：任务卡细节 → 旧任务卡 → 未决问题截断；第 2、3 段不参与裁剪。排序规则固定为 `type` → `last_seen_at desc` → `id`，保证同输入同输出。
 
 输出位置：`<project>/.agent-memory/HANDOFF.md`，同时存入 `handoff` 表。`export` 命令可把库导出为可读 markdown 目录，作为透明性与备份手段。
 
