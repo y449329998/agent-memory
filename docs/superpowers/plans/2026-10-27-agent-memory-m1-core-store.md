@@ -678,6 +678,17 @@ func TestCanonicalText_IsIdempotentAcrossUnicodeWhitespace(t *testing.T) {
 		}
 	}
 }
+
+func TestDisplayText_PreservesCaseButCleansLayout(t *testing.T) {
+	got := DisplayText("-  matchGoodsSku 与 /Home/User 路径\n")
+	want := "matchGoodsSku 与 /Home/User 路径"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	if CanonicalText("-  matchGoodsSku") != "matchgoodssku" {
+		t.Fatal("CanonicalText must still lowercase for dedupe")
+	}
+}
 ```
 
 - [ ] **Step 2: 跑测试确认失败**
@@ -704,13 +715,10 @@ var (
 	spaceRE  = regexp.MustCompile(`\s+`)
 )
 
-// CanonicalText 产出用于去重比较的文本：NFKC → 去代码围栏 → 反复去 bullet 前缀
-// → 折叠空白 → 小写。归一化结果同时是 FTS 的索引文本，所以两者必须同源。
-//
-// 每轮先 TrimSpace 再剥 bullet：Go 正则的 \s 只认 ASCII 空白，而 TrimSpace 认
-// Unicode 空白。行首若是 U+2028/2029/0085 这类空白，不先 trim 就会漏掉 bullet，
-// 使本函数不是不动点（同一文本两次归一化得到不同哈希）。
-func CanonicalText(s string) string {
+// DisplayText 是给用户看的版本：与 CanonicalText 共享 NFKC、去代码围栏、去 bullet、
+// 折叠空白这些排版清洗，但**不转小写**——标识符、API 名与路径的大小写必须保留，
+// 否则交接简报里 matchGoodsSku 会显示成 matchgoodssku。
+func DisplayText(s string) string {
 	s = norm.NFKC.String(s)
 	s = strings.ReplaceAll(s, "```", " ")
 	for {
@@ -721,8 +729,13 @@ func CanonicalText(s string) string {
 		}
 		s = next
 	}
-	s = spaceRE.ReplaceAllString(strings.TrimSpace(s), " ")
-	return strings.ToLower(s)
+	return spaceRE.ReplaceAllString(strings.TrimSpace(s), " ")
+}
+
+// CanonicalText 是去重与分词用的版本：在显示版基础上再转小写。
+// 大小写不同的同一条记忆必须合并，所以比较文本要去掉大小写差异。
+func CanonicalText(s string) string {
+	return strings.ToLower(DisplayText(s))
 }
 
 func Hash(s string) string {
@@ -1933,6 +1946,8 @@ func (s *Store) UpsertMemory(ctx context.Context, projectID int64, d domain.Memo
 		return 0, false, domain.ErrEmptyMemory
 	}
 	hash := normalize.Hash(canon)
+	// 展示文本保留大小写；去重哈希与 FTS 仍用 canon
+	display := normalize.DisplayText(d.Text)
 	now := at.Unix()
 	scope := string(d.Scope)
 	if scope == "" {
@@ -1954,7 +1969,7 @@ WHERE scope = ? AND project_id = ? AND type = ? AND text_norm_hash = ?`,
 		res, err := s.db.ExecContext(ctx, `
 INSERT INTO memory_item(scope, project_id, type, text, text_norm_hash, stale, first_seen_at, last_seen_at)
 VALUES(?, ?, ?, ?, ?, 0, ?, ?)`,
-			scope, projectID, typ, canon, hash, now, now)
+			scope, projectID, typ, display, hash, now, now)
 		if err != nil {
 			return 0, false, fmt.Errorf("insert memory: %w", err)
 		}
@@ -2271,7 +2286,7 @@ func TestFTS_SearchFindsIdentifierTerm(t *testing.T) {
 	seedForSearch(t, s)
 	got := search(t, s, "similar_words")
 	if len(got) != 1 || !strings.Contains(got[0], "matchGoodsSku") {
-		t.Fatalf("want the api constraint, got %v", got)
+		t.Fatalf("want the api constraint with original casing, got %v", got)
 	}
 }
 
