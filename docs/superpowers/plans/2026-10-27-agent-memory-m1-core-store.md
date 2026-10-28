@@ -398,11 +398,24 @@ func TestSegment_IndexesSingleCharsAndBigrams(t *testing.T) {
 
 func TestSegment_SplitsAtPunctuation(t *testing.T) {
 	got := Segment("查询构造器，闭包外用 $list")
-	join := strings.Join(got, "|")
-	if !strings.Contains(join, "查询|询构|构造") {
-		t.Fatalf("expected bigrams across 查询构造器, got %v", got)
+	// 索引侧同时输出单字与二元组，二者在切片里交替出现（查、查询、询、询构…），
+	// 所以只能按 token 判断，不能断言二元组在拼接串里连续出现。
+	tokens := make(map[string]bool, len(got))
+	for _, tok := range got {
+		tokens[tok] = true
 	}
-	if !strings.Contains(join, "list") {
+	for _, want := range []string{"查询", "询构", "构造"} {
+		if !tokens[want] {
+			t.Fatalf("missing bigram %q in %v", want, got)
+		}
+	}
+	// 标点必须切断汉字串：不能出现跨「，」或「$」的二元组
+	for _, bad := range []string{"器闭", "用l"} {
+		if tokens[bad] {
+			t.Fatalf("punctuation did not split the run: found %q in %v", bad, got)
+		}
+	}
+	if !tokens["list"] {
 		t.Fatalf("expected ascii token list, got %v", got)
 	}
 }
