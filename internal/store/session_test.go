@@ -130,6 +130,28 @@ func TestListSessions_ByProjectAndRecency(t *testing.T) {
 	}
 }
 
+// TestSessionIDByExternal_FindsAndReportsMiss 钉住 agent 隔离：同名外部 id
+// 属于不同 agent 时不能互相命中，缺失时返回 ok=false 而不是错误。
+func TestSessionIDByExternal_FindsAndReportsMiss(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	id, err := s.UpsertSession(ctx, sampleSession("s1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok, err := s.SessionIDByExternal(ctx, "qoder", "s1")
+	if err != nil || !ok || got != id {
+		t.Fatalf("got id=%d ok=%v err=%v, want id=%d ok=true", got, ok, err, id)
+	}
+	if _, ok, err := s.SessionIDByExternal(ctx, "qoder", "missing"); err != nil || ok {
+		t.Fatalf("missing session: ok=%v err=%v, want ok=false no error", ok, err)
+	}
+	if _, ok, err := s.SessionIDByExternal(ctx, "trae", "s1"); err != nil || ok {
+		t.Fatalf("other agent must not match: ok=%v err=%v", ok, err)
+	}
+}
+
 func TestUpsertSession_RejectsMissingExternalID(t *testing.T) {
 	s := openStore(t)
 	bad := sampleSession("")

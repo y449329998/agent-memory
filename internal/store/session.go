@@ -62,6 +62,20 @@ ON CONFLICT(agent, external_id) DO UPDATE SET
 	return id, nil
 }
 
+// SessionIDByExternal 按 agent + 外部会话 id 取库内主键。
+func (s *Store) SessionIDByExternal(ctx context.Context, agent, externalID string) (int64, bool, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM session WHERE agent = ? AND external_id = ?`,
+		agent, externalID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return id, true, nil
+}
+
 func (s *Store) SessionByID(ctx context.Context, id int64) (domain.Session, bool, error) {
 	var (
 		sess    domain.Session

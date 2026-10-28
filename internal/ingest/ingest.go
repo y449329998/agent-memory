@@ -2,6 +2,8 @@ package ingest
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -195,6 +197,14 @@ func (r *Runner) Run(ctx context.Context, onlyAgent string) (Result, error) {
 				if err := r.store.TouchSource(ctx, a.Name(), "session", u.Path, runAt); err != nil {
 					return res, err
 				}
+				// 首次扫到还在写的会话时不出卡；等内容静默后哈希已不变，
+				// 必须在这里补一次出卡机会，否则这场会话永远拿不到卡。
+				added, err := r.ensureTaskCard(ctx, a.Name(), u, time.Now())
+				if err != nil {
+					res.Errors = append(res.Errors, fmt.Sprintf("%s: card: %v", u.Path, err))
+				} else if added {
+					res.Cards++
+				}
 				continue
 			}
 
@@ -250,6 +260,58 @@ func (r *Runner) Run(ctx context.Context, onlyAgent string) (Result, error) {
 	}
 	res.Staled += n
 	return res, nil
+}
+
+// ensureTaskCard 给「内容未变」的会话补一次出卡机会。
+//
+// 首次扫到还在写的会话时只导入事件、不出卡（正确）；等它静默后内容不再变化，
+// 后续扫描会走进未变分支。若这里不补卡，这张卡就永远不会生成。
+//
+// 只补「没有卡」的会话：已有卡可能是人工或后续 LLM 修订过的，重写会冲掉这些改动。
+// 连接数为 1，所有查询必须顺序执行：先取会话主键，再判卡是否存在，
+// 最后读事件（rows 由 EventsFor 自行读尽并关闭），不能边遍历 rows 边查库。
+func (r *Runner) ensureTaskCard(ctx context.Context, agentName string, u agent.SessionUnit, now time.Time) (bool, error) {
+	sessID, ok, err := r.store.SessionIDByExternal(ctx, agentName, u.Session.ExternalID)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		// 上一轮可能没导入成功（例如项目归属失败）：跳过不算错误，
+		// 等内容变化时仍会走正常导入路径。
+		return false, nil
+	}
+
+	if _, err := r.store.TaskCardBySession(ctx, sessID); err == nil {
+		return false, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+
+	if !extract.Settled(u.MTime, now, r.SettleIdle) {
+		return false, nil
+	}
+
+	sess, ok, err := r.store.SessionByID(ctx, sessID)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, nil
+	}
+	events, err := r.store.EventsFor(ctx, sessID)
+	if err != nil {
+		return false, err
+	}
+	card, ok := extract.TaskCard(sess, events, now)
+	if !ok {
+		return false, nil
+	}
+	card.SessionID = sessID
+	card.ProjectID = sess.ProjectID
+	if _, err := r.store.UpsertTaskCard(ctx, card); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // runMarker 生成本轮的唯一标记。last_seen_run 的语义是「哪一轮见过」，不是墙上时间：

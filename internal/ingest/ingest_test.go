@@ -514,3 +514,128 @@ func TestResult_StringCoversSessionCounts(t *testing.T) {
 		}
 	}
 }
+
+// TestRun_UnchangedSettledSessionGetsCardOnLaterScan 回归 Critical 缺陷：
+// 会话首次被扫到时还在写（mtime 接近现在），只导入事件不出卡；等它静默后
+// 内容不再变化，哈希未变的后续扫描必须补出任务卡，而不是永远跳过。
+func TestRun_UnchangedSettledSessionGetsCardOnLaterScan(t *testing.T) {
+	home, repoA, _ := fakeQoder(t)
+	path := filepath.Join(home, "projects", "RA", "a.jsonl")
+	write(t, path,
+		fmt.Sprintf("{\"type\":\"workspace-directories\",\"sessionId\":\"s1\",\"directories\":[%q]}\n", repoA)+
+			"{\"type\":\"user\",\"sessionId\":\"s1\",\"timestamp\":\"2026-10-27T09:00:00Z\",\"message\":{\"role\":\"user\",\"content\":\"给扣减加乐观锁\"}}\n")
+	now := time.Now()
+	if err := os.Chtimes(path, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	s := openTempStore(t)
+	r := New(s, qoder.New(home))
+	r.SettleIdle = 5 * time.Minute
+
+	first, err := r.Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Cards != 0 {
+		t.Fatalf("first scan: cards = %d, want 0（还在写的会话不该出卡）", first.Cards)
+	}
+	if got := mustInt(t, s, `SELECT count(*) FROM task_card`); got != 0 {
+		t.Fatalf("first scan created %d task cards, want 0", got)
+	}
+	t.Logf("first scan: %s", first.String())
+
+	// 内容一字未改，只把 mtime 推回 1 小时前：文件已静默，应补卡。
+	settled := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(path, settled, settled); err != nil {
+		t.Fatal(err)
+	}
+	second, err := r.Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.SessionUnchanged < 1 {
+		t.Fatalf("second scan: sessions_unchanged = %d, want >= 1", second.SessionUnchanged)
+	}
+	if second.Cards != 1 {
+		t.Fatalf("second scan: cards = %d, want 1（静默后的未变会话应补出任务卡）", second.Cards)
+	}
+	if got := mustInt(t, s, `SELECT count(*) FROM task_card`); got != 1 {
+		t.Fatalf("second scan: task_card rows = %d, want 1", got)
+	}
+	t.Logf("second scan: %s", second.String())
+	t.Logf("task_card rows after second scan = %d", mustInt(t, s, `SELECT count(*) FROM task_card`))
+
+	third, err := r.Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.Cards != 0 {
+		t.Fatalf("third scan: cards = %d, want 0（已有卡不该重复产出）", third.Cards)
+	}
+	if got := mustInt(t, s, `SELECT count(*) FROM task_card`); got != 1 {
+		t.Fatalf("third scan: task_card rows = %d, want 1", got)
+	}
+	t.Logf("third scan: %s", third.String())
+	t.Logf("task_card rows after third scan = %d", mustInt(t, s, `SELECT count(*) FROM task_card`))
+}
+
+// TestRun_ExistingCardIsNotOverwritten 钉住补卡路径的边界：已有卡时不能重写，
+// 否则人工或后续 LLM 对 goal / next_steps 的修订会被规则结果冲掉。
+func TestRun_ExistingCardIsNotOverwritten(t *testing.T) {
+	home, repoA, _ := fakeQoder(t)
+	path := filepath.Join(home, "projects", "RA", "a.jsonl")
+	write(t, path,
+		fmt.Sprintf("{\"type\":\"workspace-directories\",\"sessionId\":\"s1\",\"directories\":[%q]}\n", repoA)+
+			"{\"type\":\"user\",\"sessionId\":\"s1\",\"timestamp\":\"2026-10-27T09:00:00Z\",\"message\":{\"role\":\"user\",\"content\":\"原始目标\"}}\n")
+	settled := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(path, settled, settled); err != nil {
+		t.Fatal(err)
+	}
+
+	s := openTempStore(t)
+	r := New(s, qoder.New(home))
+	first, err := r.Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Cards != 1 {
+		t.Fatalf("first scan: cards = %d, want 1", first.Cards)
+	}
+
+	// 模拟人工/LLM 修订：改 goal 并把 updated_at 固定在一个可辨识的过去时刻。
+	ctx := context.Background()
+	sessID := int64(mustInt(t, s, `SELECT id FROM session WHERE agent = 'qoder' AND external_id = 's1'`))
+	projectID := int64(mustInt(t, s, `SELECT project_id FROM session WHERE id = ?`, sessID))
+	customAt := time.Unix(1700000000, 0)
+	if _, err := s.UpsertTaskCard(ctx, domain.TaskCard{
+		SessionID: sessID, ProjectID: projectID, Goal: "人工修订后的目标",
+		Status: domain.StatusDoing, Confidence: "manual", GeneratedBy: "manual",
+		CreatedAt: customAt, UpdatedAt: customAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 内容仍然未变：这一轮会走未变分支，但已有卡必须原样保留。
+	second, err := r.Run(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.SessionUnchanged < 1 {
+		t.Fatalf("second scan: sessions_unchanged = %d, want >= 1", second.SessionUnchanged)
+	}
+	if second.Cards != 0 {
+		t.Fatalf("second scan: cards = %d, want 0（已有卡不该被重写）", second.Cards)
+	}
+	goal, err := s.QueryStrings(ctx, `SELECT goal FROM task_card WHERE session_id = ?`, sessID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(goal) != 1 || goal[0] != "人工修订后的目标" {
+		t.Fatalf("goal = %v, want 人工修订后的目标", goal)
+	}
+	if got := int64(mustInt(t, s, `SELECT updated_at FROM task_card WHERE session_id = ?`, sessID)); got != customAt.Unix() {
+		t.Fatalf("updated_at = %d, want %d（已有卡被改写）", got, customAt.Unix())
+	}
+	t.Logf("second scan: %s", second.String())
+}
