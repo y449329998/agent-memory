@@ -69,9 +69,24 @@ func (c Config) QoderHome() string {
 	if c.Qoder.Home != "" {
 		return c.Qoder.Home
 	}
-	base := c.userBaseForDiscovery()
-	if home, ok := qoder.DiscoverHome(base); ok {
-		return home
+	return QoderHomeDir(c.userBaseForDiscovery())
+}
+
+// QoderHomeDir 在 home 下解析 Qoder 配置根：.qoder-cn 优先，其次 .qoder。
+// 先按 qoder.DiscoverHome 的判据（装着 memory/projects 的目录才算数），
+// 再退到同名目录本身；两者都不存在时返回空串，由调用方决定是否落默认位置。
+func QoderHomeDir(home string) string {
+	if home == "" {
+		return ""
+	}
+	if dir, ok := qoder.DiscoverHome(home); ok {
+		return dir
+	}
+	for _, name := range []string{".qoder-cn", ".qoder"} {
+		dir := filepath.Join(home, name)
+		if st, err := os.Stat(dir); err == nil && st.IsDir() {
+			return dir
+		}
 	}
 	return ""
 }
