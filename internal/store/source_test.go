@@ -56,6 +56,36 @@ func TestPutSource_RecordsHashAndDetectsChange(t *testing.T) {
 	}
 }
 
+func TestTouchSource_RefreshesSeenRunWithoutTouchingHash(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	run1 := time.Unix(1700000000, 0)
+	run2 := run1.Add(time.Hour)
+	st := domain.SourceState{Agent: "qoder", Kind: "memory", Path: "/q/a.md", ContentHash: "h1", MTime: run1, Size: 5}
+	if err := s.PutSource(ctx, st, run1.Unix()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.TouchSource(ctx, "qoder", "memory", "/q/a.md", run2.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	row, err := s.GetSource(ctx, "qoder", "memory", "/q/a.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.ContentHash != "h1" || row.LastSeenRun != run2.Unix() {
+		t.Fatalf("hash=%q seen_run=%d want h1/%d", row.ContentHash, row.LastSeenRun, run2.Unix())
+	}
+	if row.ChangedAt.IsZero() == false {
+		t.Fatalf("touch should not record a content change: %+v", row)
+	}
+
+	// 源不存在时 touch 应当显式失败，避免编排层静默漏更新
+	if err := s.TouchSource(ctx, "qoder", "memory", "/q/missing.md", run2.Unix()); err == nil {
+		t.Fatal("want error when source row does not exist")
+	}
+}
+
 func TestMarkSourceError_KeepsPreviousHash(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()

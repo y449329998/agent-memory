@@ -38,6 +38,27 @@ ON CONFLICT(agent, kind, path) DO UPDATE SET
 	return nil
 }
 
+// TouchSource 只刷新 last_seen_run：内容没变的源仍然要在本轮"露过面"，
+// 否则 stale 判定会把没变化的条目误判成已消失。
+// 源行不存在时显式报错——静默成功会让编排层以为这一轮已经见过它。
+func (s *Store) TouchSource(ctx context.Context, agent, kind, path string, runAt int64) error {
+	res, err := s.db.ExecContext(ctx, `
+UPDATE source SET last_seen_run = ?, updated_at = ?
+WHERE agent = ? AND kind = ? AND path = ?`,
+		runAt, time.Now().Unix(), agent, kind, path)
+	if err != nil {
+		return fmt.Errorf("touch source %s:%s: %w", agent, path, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("touch source %s:%s: no such row", agent, path)
+	}
+	return nil
+}
+
 // MarkSourceError 只登记错误，不动 content_hash 也不推进 last_seen_run。
 // 推进了会让 stale 判定以为「这一轮确实见到了这个源」。
 func (s *Store) MarkSourceError(ctx context.Context, agent, kind, path, msg string, at int64) error {
