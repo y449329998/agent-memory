@@ -659,6 +659,25 @@ func TestHashBytes_MatchesHashOfContent(t *testing.T) {
 		t.Fatal("HashBytes and Hash must agree")
 	}
 }
+
+// 归一化必须是不动点：同一文本归一化两次得到同一结果。否则去重哈希会随
+// 调用次数漂移，同一条记忆在两次扫描里被当成两条。
+func TestCanonicalText_IsIdempotentAcrossUnicodeWhitespace(t *testing.T) {
+	inputs := []string{
+		"\u2028- x",
+		"\u2029* y",
+		"\u0085+ z",
+		"\u00a0- 全角空格 bullet",
+		"- - 连续 bullet",
+		"普通文本",
+	}
+	for _, in := range inputs {
+		once := CanonicalText(in)
+		if twice := CanonicalText(once); once != twice {
+			t.Fatalf("not idempotent for %q: first=%q second=%q", in, once, twice)
+		}
+	}
+}
 ```
 
 - [ ] **Step 2: 跑测试确认失败**
@@ -687,10 +706,15 @@ var (
 
 // CanonicalText 产出用于去重比较的文本：NFKC → 去代码围栏 → 反复去 bullet 前缀
 // → 折叠空白 → 小写。归一化结果同时是 FTS 的索引文本，所以两者必须同源。
+//
+// 每轮先 TrimSpace 再剥 bullet：Go 正则的 \s 只认 ASCII 空白，而 TrimSpace 认
+// Unicode 空白。行首若是 U+2028/2029/0085 这类空白，不先 trim 就会漏掉 bullet，
+// 使本函数不是不动点（同一文本两次归一化得到不同哈希）。
 func CanonicalText(s string) string {
 	s = norm.NFKC.String(s)
 	s = strings.ReplaceAll(s, "```", " ")
 	for {
+		s = strings.TrimSpace(s)
 		next := bulletRE.ReplaceAllString(s, "")
 		if next == s {
 			break
