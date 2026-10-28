@@ -112,6 +112,42 @@ func TestUpsertMemory_RejectsBlankText(t *testing.T) {
 	}
 }
 
+// TestUpsertMemory_KeepsDisplayCaseButDedupesCaseInsensitively 锁住展示与去重的分离：
+// memory_item.text 保留原文大小写（供展示/交接简报），text_norm_hash 仍走小写归一化。
+func TestUpsertMemory_KeepsDisplayCaseButDedupesCaseInsensitively(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0)
+
+	id, created, err := s.UpsertMemory(ctx, 0, draft("qoder", `/q/a.md`, "Git commit messages 必须使用中文"), now)
+	if err != nil || !created {
+		t.Fatalf("first upsert id=%d created=%v err=%v", id, created, err)
+	}
+	item, err := s.MemoryByID(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Text != "Git commit messages 必须使用中文" {
+		t.Fatalf("display text lost original case: %q", item.Text)
+	}
+
+	// 仅大小写不同，去重必须合并；合并路径不改写首次写入的展示文本。
+	id2, created2, err := s.UpsertMemory(ctx, 0, draft("trae", `/t/b.md`, "git COMMIT messages 必须使用中文"), now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created2 || id2 != id {
+		t.Fatalf("case-only difference must merge: id=%d created=%v want id=%d", id2, created2, id)
+	}
+	merged, err := s.MemoryByID(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged.Text != "Git commit messages 必须使用中文" {
+		t.Fatalf("merge path must keep first display text, got %q", merged.Text)
+	}
+}
+
 func TestUpsertMemory_WritesSegmentedFTSRow(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()

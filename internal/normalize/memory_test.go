@@ -52,6 +52,17 @@ func TestHashBytes_MatchesHashOfContent(t *testing.T) {
 	}
 }
 
+func TestDisplayText_PreservesCaseButCleansLayout(t *testing.T) {
+	got := DisplayText("-  matchGoodsSku 与 /Home/User 路径\n")
+	want := "matchGoodsSku 与 /Home/User 路径"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	if CanonicalText("-  matchGoodsSku") != "matchgoodssku" {
+		t.Fatal("CanonicalText must still lowercase for dedupe")
+	}
+}
+
 func TestCanonicalText_IsIdempotentAcrossUnicodeWhitespace(t *testing.T) {
 	inputs := []string{
 		"\u2028- x",

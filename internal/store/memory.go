@@ -18,13 +18,15 @@ import (
 // 命中时不复制文本，只追加来源并把条目恢复为新鲜。projectID 为 0 表示用户级。
 // 适配器只报原文，归一化与哈希都在这层做，保证不同 agent 的排版差异不影响去重。
 //
-// 入库文本、text_norm_hash 与 FTS 行三者同源于 canon：先归一化再各自派生，
-// 否则会出现「检索命中但内容对不上」。
+// 入库文本、text_norm_hash 与 FTS 行三者同源：text 用不做小写的 DisplayText 保留
+// 标识符与路径的可读大小写，text_norm_hash 与 FTS 仍由小写化的 canon 派生，
+// 所以大小写不同的两条照样合并、照样都能被检索命中。
 func (s *Store) UpsertMemory(ctx context.Context, projectID int64, d domain.MemoryDraft, at time.Time) (int64, bool, error) {
 	canon := normalize.CanonicalText(d.Text)
 	if canon == "" {
 		return 0, false, domain.ErrEmptyMemory
 	}
+	display := normalize.DisplayText(d.Text)
 	hash := normalize.Hash(canon)
 	now := at.Unix()
 	scope := string(d.Scope)
@@ -47,7 +49,7 @@ WHERE scope = ? AND project_id = ? AND type = ? AND text_norm_hash = ?`,
 		res, err := s.db.ExecContext(ctx, `
 INSERT INTO memory_item(scope, project_id, type, text, text_norm_hash, stale, first_seen_at, last_seen_at)
 VALUES(?, ?, ?, ?, ?, 0, ?, ?)`,
-			scope, projectID, typ, canon, hash, now, now)
+			scope, projectID, typ, display, hash, now, now)
 		if err != nil {
 			return 0, false, fmt.Errorf("insert memory: %w", err)
 		}

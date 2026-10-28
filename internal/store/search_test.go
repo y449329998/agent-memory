@@ -63,8 +63,8 @@ func TestFTS_SearchFindsIdentifierTerm(t *testing.T) {
 	s := openStore(t)
 	seedForSearch(t, s)
 	got := search(t, s, "similar_words")
-	// 入库文本经 CanonicalText 小写化，断言用不区分大小写的包含。
-	if len(got) != 1 || !strings.Contains(strings.ToLower(got[0]), "matchgoodssku") {
+	// 入库文本保留原文大小写，检索结果应原样带出标识符。
+	if len(got) != 1 || !strings.Contains(got[0], "matchGoodsSku") {
 		t.Fatalf("want the api constraint, got %v", got)
 	}
 }
