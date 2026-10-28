@@ -262,3 +262,60 @@ SELECT ms.agent, count(DISTINCT ms.memory_id) FROM memory_source ms GROUP BY ms.
 	}
 	return st, rows2.Err()
 }
+
+// SourceRow 是源清单的一行，供 Web UI 的「源」抽屉展示。
+type SourceRow struct {
+	Agent       string
+	Kind        string
+	Path        string
+	ContentHash string
+	LastError   string
+	LastSeenRun int64
+	UpdatedAt   time.Time
+	ChangedAt   time.Time
+	Size        int64
+}
+
+// ListSources 按最近更新时间倒序列出扫描源。failedOnly 只返回解析失败的源；
+// agent 为空表示不过滤。这只是只读浏览，不参与扫描决策。
+func (s *Store) ListSources(ctx context.Context, agent string, failedOnly bool, limit int) ([]SourceRow, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	q := `SELECT agent, kind, path, content_hash, last_error, last_seen_run, updated_at, changed_at, size
+FROM source WHERE 1=1`
+	args := []any{}
+	if agent != "" {
+		q += ` AND agent = ?`
+		args = append(args, agent)
+	}
+	if failedOnly {
+		q += ` AND last_error <> ''`
+	}
+	q += ` ORDER BY last_seen_run DESC, updated_at DESC, agent, path LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []SourceRow
+	for rows.Next() {
+		var (
+			r                    SourceRow
+			updatedAt, changedAt int64
+		)
+		if err := rows.Scan(&r.Agent, &r.Kind, &r.Path, &r.ContentHash, &r.LastError,
+			&r.LastSeenRun, &updatedAt, &changedAt, &r.Size); err != nil {
+			return nil, err
+		}
+		r.UpdatedAt = time.Unix(updatedAt, 0)
+		if changedAt != 0 {
+			r.ChangedAt = time.Unix(changedAt, 0)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

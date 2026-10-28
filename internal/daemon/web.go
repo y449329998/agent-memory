@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -197,4 +198,21 @@ func (s *Server) handleSetStale(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": req.ID, "stale": *req.Stale})
+}
+
+// handleListSources 列出扫描源，供「源 / 失败源」抽屉使用。
+func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+	rows, err := s.st.ListSources(r.Context(), r.URL.Query().Get("agent"),
+		r.URL.Query().Get("failed") == "1", limit)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sources": rows, "count": len(rows)})
 }
