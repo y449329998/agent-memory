@@ -330,15 +330,20 @@ func (s *Server) handleResolveProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"known": true, "project": project})
 }
 
-// projectIDFromRequest 允许调用方用路径或 key 引用项目；空引用表示不限定（只查用户级）。
+// projectIDFromRequest 允许调用方用路径或 key 引用项目；两者都空表示不限定（只查用户级）。
+// 只给 key 时必须走 ProjectByKey：调用方（MCP 与 /v1/search）经常手里只有 key。
 func (s *Server) projectIDFromRequest(ctx context.Context, pathRef, keyRef string) (int64, error) {
-	if strings.TrimSpace(pathRef) == "" {
+	pathRef = strings.TrimSpace(pathRef)
+	keyRef = strings.TrimSpace(keyRef)
+	if pathRef == "" && keyRef == "" {
 		return 0, nil
 	}
-	if id, ok, err := s.st.ResolveProjectByPath(ctx, pathRef); err != nil {
-		return 0, err
-	} else if ok {
-		return id, nil
+	if pathRef != "" {
+		if id, ok, err := s.st.ResolveProjectByPath(ctx, pathRef); err != nil {
+			return 0, err
+		} else if ok {
+			return id, nil
+		}
 	}
 	if keyRef != "" {
 		if p, ok, err := s.st.ProjectByKey(ctx, keyRef); err != nil {
@@ -347,7 +352,11 @@ func (s *Server) projectIDFromRequest(ctx context.Context, pathRef, keyRef strin
 			return p.ID, nil
 		}
 	}
-	return 0, fmt.Errorf("unknown project %q", pathRef)
+	ref := pathRef
+	if ref == "" {
+		ref = keyRef
+	}
+	return 0, fmt.Errorf("unknown project %q", ref)
 }
 
 // clientError 表示调用方输入有问题，httpError 据此回 400 而不是 500。

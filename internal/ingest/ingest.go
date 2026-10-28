@@ -123,8 +123,16 @@ func (r *Runner) Run(ctx context.Context, onlyAgent string) (Result, error) {
 			if seen && prev == hash {
 				res.Unchanged++
 				// 内容没变也要登记「本轮见过」，否则 stale 判定会把它当成消失的源
-				if err := r.store.TouchSource(ctx, a.Name(), "memory", u.Path, runAt); err != nil {
+				hadError, err := r.store.TouchSource(ctx, a.Name(), "memory", u.Path, runAt)
+				if err != nil {
 					return res, err
+				}
+				if hadError {
+					// 上一轮该源解析失败、条目因此被判过时；文件恢复原样时哈希未变，
+					// 只 touch 不会复活它们。仅在「刚从错误恢复」时复活。
+					if _, err := r.store.UnstaleBySource(ctx, a.Name(), "memory", u.Path); err != nil {
+						return res, err
+					}
 				}
 				continue
 			}
@@ -137,13 +145,16 @@ func (r *Runner) Run(ctx context.Context, onlyAgent string) (Result, error) {
 			}
 
 			failed := false
+			keepIDs := make([]int64, 0, len(u.Drafts))
 			for _, d := range u.Drafts {
-				_, created, err := r.store.UpsertMemory(ctx, projectID, d, at)
+				id, created, err := r.store.UpsertMemory(ctx, projectID, d, at)
 				if err != nil {
 					res.Errors = append(res.Errors, fmt.Sprintf("%s: %v", u.Path, err))
 					failed = true
 					continue
 				}
+				// 合并命中的 id 也算本轮保留：同一条目被别的文件写回来时仍在用。
+				keepIDs = append(keepIDs, id)
 				if created {
 					res.Created++
 				} else {
@@ -161,6 +172,14 @@ func (r *Runner) Run(ctx context.Context, onlyAgent string) (Result, error) {
 			}, runAt); err != nil {
 				return res, err
 			}
+
+			// 本轮该源没写回来的旧条目按「被替换」处理：文件被重写时旧记忆
+			// 仍挂在同一来源上，只靠 MarkStaleForRun 永远判不出来。
+			staled, err := r.store.MarkStaleSuperseded(ctx, a.Name(), "memory", u.Path, keepIDs, runAt)
+			if err != nil {
+				return res, err
+			}
+			res.Staled += staled
 		}
 
 		sUnits, err := a.ScanSessionUnits(ctx)
@@ -191,7 +210,7 @@ func (r *Runner) Run(ctx context.Context, onlyAgent string) (Result, error) {
 			}
 			if seen && prev == hash {
 				res.SessionUnchanged++
-				if err := r.store.TouchSource(ctx, a.Name(), "session", u.Path, runAt); err != nil {
+				if _, err := r.store.TouchSource(ctx, a.Name(), "session", u.Path, runAt); err != nil {
 					return res, err
 				}
 				// 首次扫到还在写的会话时不出卡；等内容静默后哈希已不变，

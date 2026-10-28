@@ -338,6 +338,136 @@ func TestRun_TimestampsUseWallClockNotRunMarker(t *testing.T) {
 	}
 }
 
+// TestRun_RewriteStalesOldTextAndRestoreRevivesIt 回归 stale 账本的两处错账：
+// 同一文件 A→B 重写后旧条目必须过时（不能新旧两版并存）；
+// 删文件再恢复最初的内容后，旧条目必须重新变新鲜。
+func TestRun_RewriteStalesOldTextAndRestoreRevivesIt(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, ".qoder-cn")
+	path := filepath.Join(home, "memory", "user.md")
+	write(t, path, "---\nmetadata:\n  type: user\n---\n\n第一版内容。\n")
+
+	s := openTempStore(t)
+	r := New(s, qoder.New(home))
+	if _, err := r.Run(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	firstID := mustInt(t, s, `SELECT id FROM memory_item WHERE text LIKE '%第一版%'`)
+
+	// 文件被重写：旧文本不再出现，必须过时。
+	write(t, path, "---\nmetadata:\n  type: user\n---\n\n第二版内容。\n")
+	if _, err := r.Run(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	secondID := mustInt(t, s, `SELECT id FROM memory_item WHERE text LIKE '%第二版%'`)
+	if got := mustInt(t, s, `SELECT stale FROM memory_item WHERE id = ?`, firstID); got != 1 {
+		t.Fatalf("重写后第一版 stale = %d, want 1（旧条目未过时，新旧两版并存）", got)
+	}
+	if got := mustInt(t, s, `SELECT stale FROM memory_item WHERE id = ?`, secondID); got != 0 {
+		t.Fatalf("第二版 stale = %d, want 0", got)
+	}
+
+	// 文件被删：本轮没见到 → 第二版过时。
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustInt(t, s, `SELECT stale FROM memory_item WHERE id = ?`, secondID); got != 1 {
+		t.Fatalf("删除文件后第二版 stale = %d, want 1", got)
+	}
+
+	// 恢复最初的内容：旧条目必须复活，且源上不留错误。
+	write(t, path, "---\nmetadata:\n  type: user\n---\n\n第一版内容。\n")
+	if _, err := r.Run(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustInt(t, s, `SELECT stale FROM memory_item WHERE id = ?`, firstID); got != 0 {
+		t.Fatalf("恢复原内容后第一版 stale = %d, want 0（旧条目未复活）", got)
+	}
+	if got := mustInt(t, s, `SELECT stale FROM memory_item WHERE id = ?`, secondID); got != 1 {
+		t.Fatalf("恢复原内容后第二版 stale = %d, want 1", got)
+	}
+	if got := mustInt(t, s, `SELECT count(*) FROM source WHERE last_error <> ''`); got != 0 {
+		t.Fatalf("恢复后 source.last_error 应为空, got %d 条带错误", got)
+	}
+}
+
+// erroringMemoryAdapter 把指定记忆源换成一条读错误，其余单元照常返回。
+type erroringMemoryAdapter struct {
+	agent.Adapter
+	path string
+}
+
+func (a erroringMemoryAdapter) ScanMemoryUnits(ctx context.Context) ([]agent.MemoryUnit, error) {
+	units, err := a.Adapter.ScanMemoryUnits(ctx)
+	if err != nil {
+		return units, err
+	}
+	out := make([]agent.MemoryUnit, 0, len(units))
+	for _, u := range units {
+		if u.Path == a.path {
+			u = agent.MemoryUnit{Path: a.path, Err: errors.New("read: boom")}
+		}
+		out = append(out, u)
+	}
+	return out, nil
+}
+
+// TestRun_ErrorRecoveryRevivesStaleItemsAndClearsLastError 回归：源解析失败那一轮
+// 没露面，条目被 MarkStaleForRun 判成过时；文件恢复原样时哈希未变只 touch，
+// 必须借「刚从错误恢复」这条线索把条目复活并清掉 last_error。
+func TestRun_ErrorRecoveryRevivesStaleItemsAndClearsLastError(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, ".qoder-cn")
+	path := filepath.Join(home, "memory", "user.md")
+	write(t, path, "---\nmetadata:\n  type: user\n---\n\n恢复后应复活的条目。\n")
+
+	s := openTempStore(t)
+	normal := qoder.New(home)
+	if _, err := New(s, normal).Run(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	id := mustInt(t, s, `SELECT id FROM memory_item`)
+
+	// 第二轮该源读失败：last_error 记下，条目因这一轮没露面被判过时。
+	res, err := New(s, erroringMemoryAdapter{Adapter: normal, path: path}).Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Errors) == 0 {
+		t.Fatal("want a recorded source error")
+	}
+	if res.Staled != 1 {
+		t.Fatalf("错误轮 staled = %d, want 1", res.Staled)
+	}
+	if got := mustInt(t, s, `SELECT stale FROM memory_item WHERE id = ?`, id); got != 1 {
+		t.Fatalf("错误轮后 stale = %d, want 1", got)
+	}
+	if got := mustInt(t, s, `SELECT count(*) FROM source WHERE last_error <> ''`); got != 1 {
+		t.Fatalf("last_error rows = %d, want 1", got)
+	}
+
+	// 第三轮文件恢复原样：哈希未变只 touch；条目必须复活、错误必须清掉。
+	res, err = New(s, normal).Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Unchanged != 1 {
+		t.Fatalf("unchanged = %d, want 1（恢复原样应走未变分支）", res.Unchanged)
+	}
+	if got := mustInt(t, s, `SELECT stale FROM memory_item WHERE id = ?`, id); got != 0 {
+		t.Fatalf("恢复后 stale = %d, want 0（错误恢复没有复活条目）", got)
+	}
+	if got := mustInt(t, s, `SELECT count(*) FROM source WHERE last_error <> ''`); got != 0 {
+		t.Fatalf("恢复后 last_error 未清空, got %d 条", got)
+	}
+	t.Logf("error recovery: stale=%d last_error_rows=%d",
+		mustInt(t, s, `SELECT stale FROM memory_item WHERE id = ?`, id),
+		mustInt(t, s, `SELECT count(*) FROM source WHERE last_error <> ''`))
+}
+
 func TestResult_StringIsReadable(t *testing.T) {
 	got := Result{Units: 4, Created: 2, Merged: 1, Unchanged: 1, Staled: 0}.String()
 	for _, want := range []string{"units=4", "created=2", "merged=1", "unchanged=1", "staled=0"} {

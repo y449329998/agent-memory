@@ -281,6 +281,63 @@ WHERE stale = 0
 	return int(n), err
 }
 
+// MarkStaleSuperseded 把一个源里本轮不再出现的旧条目置为过时。
+// 保留本轮刚写入的 keepIDs；被其他 agent 的新鲜来源支撑的条目不动。
+//
+// 场景：agent 重写了记忆文件。旧条目仍挂在同一个 (agent, path) 来源上，
+// 该路径本轮又见过，MarkStaleForRun 便不会再判它，结果新旧两版长期并存。
+// 这里按「本轮该源写入/命中的集合」做差集，把被替换掉的旧版本收掉。
+// keepIDs 为空表示该源本轮没有产出任何条目，所有旧条目都应过时。
+func (s *Store) MarkStaleSuperseded(ctx context.Context, agent, kind, path string, keepIDs []int64, runAt int64) (int, error) {
+	where := `stale = 0
+  AND id IN (SELECT memory_id FROM memory_source WHERE agent = ? AND path = ?)
+  AND NOT EXISTS (
+    SELECT 1 FROM memory_source ms
+    JOIN source src ON src.agent = ms.agent AND src.kind = ? AND src.path = ms.path
+    WHERE ms.memory_id = memory_item.id
+      AND NOT (ms.agent = ? AND ms.path = ?)
+      AND src.last_seen_run >= ?)`
+	args := []any{agent, path, kind, agent, path, runAt}
+
+	if len(keepIDs) > 0 {
+		where += ` AND id NOT IN (` + strings.TrimSuffix(strings.Repeat("?,", len(keepIDs)), ",") + `)`
+		for _, id := range keepIDs {
+			args = append(args, id)
+		}
+	}
+
+	res, err := s.db.ExecContext(ctx, `UPDATE memory_item SET stale = 1 WHERE `+where, args...)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
+// UnstaleBySource 把某个记忆源支撑的过时条目恢复为新鲜。
+//
+// 只在「该源刚从解析错误中恢复」时调用：错误那一轮源没露面，条目被
+// MarkStaleForRun 判成过时，而文件恢复原样时哈希未变只走 TouchSource，
+// 不复活就会一直挂着 stale。
+// 已知取舍：人工 supersedes 标过的条目若仍被该源支撑，也会一并复活；
+// 因此调用条件必须保持这么窄，不要扩大到「每次 touch 都复活」。
+func (s *Store) UnstaleBySource(ctx context.Context, agent, kind, path string) (int, error) {
+	if kind != "memory" {
+		// 只有记忆源会出现在 memory_source 里；会话源不该触发复活。
+		return 0, nil
+	}
+	res, err := s.db.ExecContext(ctx, `
+UPDATE memory_item SET stale = 0
+WHERE stale = 1
+  AND id IN (SELECT memory_id FROM memory_source WHERE agent = ? AND path = ?)`,
+		agent, path)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
 // PurgeStale 真删所有过时条目，并清掉 FTS 行与来源行。
 // memory_fts 是独立虚表，外键级联管不到它，必须显式删除；三者同一事务。
 func (s *Store) PurgeStale(ctx context.Context) (int, error) {

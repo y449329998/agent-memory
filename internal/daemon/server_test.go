@@ -103,6 +103,58 @@ func TestSearchEndpointUsesSharedStore(t *testing.T) {
 	}
 }
 
+// TestSearchEndpointResolvesProjectKey 回归：只传 project_key 时曾被当成空引用，
+// 项目级记忆一条都检索不到（随后还可能退化成全库检索）。
+func TestSearchEndpointResolvesProjectKey(t *testing.T) {
+	s, st := newTestServer(t)
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0)
+
+	projectID, err := st.EnsureProject(ctx, "f:/go/demo", "demo", "git@github.com:foo/demo.git", "F:/go/demo", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = st.UpsertMemory(ctx, projectID, domain.MemoryDraft{
+		Scope: domain.ScopeProject, Type: domain.TypeConstraint,
+		Text: "本项目专用的中文约束", SourceAgent: "cli", SourcePath: "cli",
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := doJSON(t, s, http.MethodPost, "/v1/search", "test-token-0123456789abcdef",
+		map[string]any{"query": "专用", "project_key": "f:/go/demo", "limit": 5})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Hits []struct {
+			Scope string `json:"scope"`
+			Text  string `json:"text"`
+		} `json:"hits"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Hits) != 1 || out.Hits[0].Scope != "project" || !strings.Contains(out.Hits[0].Text, "专用") {
+		t.Fatalf("project_key 应能命中该项目级记忆, hits = %+v", out.Hits)
+	}
+
+	// 不带任何项目引用时只看用户级：这条项目级记忆不得漏出。
+	rec = doJSON(t, s, http.MethodPost, "/v1/search", "test-token-0123456789abcdef",
+		map[string]any{"query": "专用", "limit": 5})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	out.Hits = nil
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Hits) != 0 {
+		t.Fatalf("省略项目参数不应返回项目级记忆, hits = %+v", out.Hits)
+	}
+}
+
 func TestAddEndpointValidatesInput(t *testing.T) {
 	s, _ := newTestServer(t)
 	rec := doJSON(t, s, http.MethodPost, "/v1/memory", "test-token-0123456789abcdef",

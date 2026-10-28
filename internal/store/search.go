@@ -45,17 +45,29 @@ func (f FTS) Search(ctx context.Context, q domain.SearchQuery) ([]domain.Hit, er
 
 	where := []string{"memory_fts MATCH ?"}
 	args := []any{expr}
-	if q.ProjectID > 0 {
+	switch {
+	case q.ProjectID > 0:
 		where = append(where, `(m.project_id = ? OR m.scope = ?)`)
 		args = append(args, q.ProjectID, string(domain.ScopeUser))
+		if q.Scope != "" {
+			where = append(where, `m.scope = ?`)
+			args = append(args, string(q.Scope))
+		}
+	case q.Scope == domain.ScopeProject:
+		// 显式要 project 级却没给项目：没有任何条目能匹配，保持 CLI 简单，直接空结果。
+		return nil, nil
+	default:
+		// 没有项目上下文时只查用户级，与 ListMemories(0) 及工具描述「省略则只查全局记忆」一致。
+		scope := q.Scope
+		if scope == "" {
+			scope = domain.ScopeUser
+		}
+		where = append(where, `m.scope = ?`)
+		args = append(args, string(scope))
 	}
 	if q.Type != "" {
 		where = append(where, `m.type = ?`)
 		args = append(args, string(q.Type))
-	}
-	if q.Scope != "" {
-		where = append(where, `m.scope = ?`)
-		args = append(args, string(q.Scope))
 	}
 	if !q.IncludeStale {
 		where = append(where, `m.stale = 0`)

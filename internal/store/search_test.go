@@ -148,6 +148,53 @@ func TestFTS_ResultCarriesSourcesAndOrigin(t *testing.T) {
 	}
 }
 
+// TestFTS_NoProjectSearchesOnlyUserScope 回归：省略项目参数时曾不加任何 scope 条件，
+// 把其他项目的 project 级记忆一并返回，与 ListMemories(0) 与工具描述都不一致。
+func TestFTS_NoProjectSearchesOnlyUserScope(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0)
+
+	user := domain.MemoryDraft{Scope: domain.ScopeUser, Type: domain.TypePreference, Text: "中文沟通优先", SourceAgent: "qoder", SourcePath: "/u.md"}
+	if _, _, err := s.UpsertMemory(ctx, 0, user, now); err != nil {
+		t.Fatal(err)
+	}
+	p3 := domain.MemoryDraft{Scope: domain.ScopeProject, Type: domain.TypeFact, Text: "项目 3 的中文说明", SourceAgent: "trae", SourcePath: "/p3.md"}
+	if _, _, err := s.UpsertMemory(ctx, 3, p3, now); err != nil {
+		t.Fatal(err)
+	}
+	p9 := domain.MemoryDraft{Scope: domain.ScopeProject, Type: domain.TypeFact, Text: "项目 9 的中文约束", SourceAgent: "trae", SourcePath: "/p9.md"}
+	if _, _, err := s.UpsertMemory(ctx, 9, p9, now); err != nil {
+		t.Fatal(err)
+	}
+
+	hits, err := (FTS{store: s}).Search(ctx, domain.SearchQuery{Text: "中文", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sawUser := false
+	for _, h := range hits {
+		if h.Memory.Scope == domain.ScopeProject {
+			t.Fatalf("无项目参数时泄漏了 project 级条目: %q (project %d)", h.Memory.Text, h.Memory.ProjectID)
+		}
+		if strings.Contains(h.Memory.Text, "中文沟通优先") {
+			sawUser = true
+		}
+	}
+	if !sawUser {
+		t.Fatalf("无项目参数时应命中用户级条目, got %+v", hits)
+	}
+
+	// 显式要 project 级却没有项目上下文：空结果，不报错。
+	projectOnly, err := (FTS{store: s}).Search(ctx, domain.SearchQuery{Text: "中文", Scope: domain.ScopeProject, Limit: 10})
+	if err != nil {
+		t.Fatalf("project scope without project id must not error: %v", err)
+	}
+	if len(projectOnly) != 0 {
+		t.Fatalf("project scope without project id should match nothing, got %d hits", len(projectOnly))
+	}
+}
+
 func TestFTS_ProjectSearchAlsoReturnsUserScope(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()

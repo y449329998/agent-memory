@@ -413,7 +413,7 @@ func TestMarkStaleForRun_OlderRunMarkerDoesNotHideNewerTouch(t *testing.T) {
 	if err := s.PutSource(ctx, domain.SourceState{Agent: "qoder", Kind: "memory", Path: "/q/a.md", ContentHash: "h1"}, older.Unix()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.TouchSource(ctx, "qoder", "memory", "/q/a.md", newer.Unix()); err != nil {
+	if _, err := s.TouchSource(ctx, "qoder", "memory", "/q/a.md", newer.Unix()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -457,6 +457,85 @@ func TestPurgeStale_RemovesFTSRowAndSources(t *testing.T) {
 	if _, err := s.MemoryByID(ctx, kept); err != nil {
 		t.Fatalf("non-stale memory removed: %v", err)
 	}
+}
+
+// TestMarkStaleSuperseded_StalesItemsReplacedInSameSource 场景一：同一个文件被重写后，
+// 旧文本对应的条目在新一轮不再出现，应被置为过时，避免新旧两版并存。
+func TestMarkStaleSuperseded_StalesItemsReplacedInSameSource(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	run1 := time.Unix(1700000000, 0)
+	run2 := run1.Add(time.Hour)
+
+	old, _, err := s.UpsertMemory(ctx, 0, draft("qoder", `/q/a.md`, "旧版本内容"), run1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, _, err := s.UpsertMemory(ctx, 0, draft("qoder", `/q/a.md`, "新版本内容"), run2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutSource(ctx, domain.SourceState{Agent: "qoder", Kind: "memory", Path: "/q/a.md", ContentHash: "h2"}, run2.Unix()); err != nil {
+		t.Fatal(err)
+	}
+
+	staled, err := s.MarkStaleSuperseded(ctx, "qoder", "memory", "/q/a.md", []int64{fresh}, run2.Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if staled != 1 {
+		t.Fatalf("staled = %d, want 1", staled)
+	}
+	assertStale(t, s, old, true)
+	assertStale(t, s, fresh, false)
+
+	// keepIDs 为空时同样工作：该源剩下的旧条目全部过时。
+	legacy, _, err := s.UpsertMemory(ctx, 0, draft("qoder", `/q/a.md`, "更早的遗留内容"), run1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staled, err = s.MarkStaleSuperseded(ctx, "qoder", "memory", "/q/a.md", nil, run2.Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if staled != 2 {
+		t.Fatalf("empty keepIDs: staled = %d, want 2（该源支撑的新鲜条目全部过时）", staled)
+	}
+	assertStale(t, s, fresh, true)
+	assertStale(t, s, legacy, true)
+}
+
+// TestMarkStaleSuperseded_LeavesItemSupportedByOtherFreshSource 场景二：条目同时被
+// 另一个 agent 本轮刚见过的源支撑时不能判过时——旧文件里的文本还在别处生效。
+func TestMarkStaleSuperseded_LeavesItemSupportedByOtherFreshSource(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	run1 := time.Unix(1700000000, 0)
+	run2 := run1.Add(time.Hour)
+
+	shared, _, err := s.UpsertMemory(ctx, 0, draft("qoder", `/q/a.md`, "两个 agent 共同支撑的条目"), run1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged, created, err := s.UpsertMemory(ctx, 0, draft("trae", `/t/a.md`, "两个 agent 共同支撑的条目"), run2); err != nil || created || merged != shared {
+		t.Fatalf("cross-agent merge failed: id=%d created=%v err=%v", merged, created, err)
+	}
+	// trae 的源本轮见过（last_seen_run >= runAt），qoder 的文件本轮被重写掉了这条。
+	if err := s.PutSource(ctx, domain.SourceState{Agent: "trae", Kind: "memory", Path: "/t/a.md", ContentHash: "h1"}, run2.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutSource(ctx, domain.SourceState{Agent: "qoder", Kind: "memory", Path: "/q/a.md", ContentHash: "h2"}, run2.Unix()); err != nil {
+		t.Fatal(err)
+	}
+
+	staled, err := s.MarkStaleSuperseded(ctx, "qoder", "memory", "/q/a.md", nil, run2.Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if staled != 0 {
+		t.Fatalf("staled = %d, want 0（另一个 agent 的新鲜来源仍支撑该条目）", staled)
+	}
+	assertStale(t, s, shared, false)
 }
 
 func TestListMemories_ProjectFilterIncludesUserScope(t *testing.T) {

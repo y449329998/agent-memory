@@ -71,7 +71,7 @@ func TestTouchSource_RefreshesSeenRunWithoutTouchingHash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := s.TouchSource(ctx, "qoder", "memory", "/q/a.md", run2.Unix()); err != nil {
+	if _, err := s.TouchSource(ctx, "qoder", "memory", "/q/a.md", run2.Unix()); err != nil {
 		t.Fatal(err)
 	}
 	row, err := s.GetSource(ctx, "qoder", "memory", "/q/a.md")
@@ -86,8 +86,52 @@ func TestTouchSource_RefreshesSeenRunWithoutTouchingHash(t *testing.T) {
 	}
 
 	// 源不存在时 touch 应当显式失败，避免编排层静默漏更新
-	if err := s.TouchSource(ctx, "qoder", "memory", "/q/missing.md", run2.Unix()); err == nil {
+	if _, err := s.TouchSource(ctx, "qoder", "memory", "/q/missing.md", run2.Unix()); err == nil {
 		t.Fatal("want error when source row does not exist")
+	}
+}
+
+// TestTouchSource_ClearsLastErrorAndReportsIt 回归：源从解析错误里恢复后，
+// 只 touch 不重写时 last_error 必须清空，且调用方要能知道「刚才是错误态」，
+// 以便把因错误轮未露面而被标 stale 的条目复活。
+func TestTouchSource_ClearsLastErrorAndReportsIt(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	run1 := time.Unix(1700000000, 0)
+	run2 := run1.Add(time.Hour)
+	run3 := run1.Add(2 * time.Hour)
+	if err := s.PutSource(ctx, domain.SourceState{Agent: "qoder", Kind: "memory", Path: "/q/a.md", ContentHash: "h1"}, run1.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkSourceError(ctx, "qoder", "memory", "/q/a.md", "parse: bad", run2.Unix()); err != nil {
+		t.Fatal(err)
+	}
+
+	hadError, err := s.TouchSource(ctx, "qoder", "memory", "/q/a.md", run3.Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hadError {
+		t.Fatal("want hadError=true after a recorded parse error")
+	}
+	row, err := s.GetSource(ctx, "qoder", "memory", "/q/a.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.LastError != "" {
+		t.Fatalf("touch after recovery must clear last_error, got %q", row.LastError)
+	}
+	if row.LastSeenRun != run3.Unix() {
+		t.Fatalf("last_seen_run = %d, want %d", row.LastSeenRun, run3.Unix())
+	}
+
+	// 已经是干净状态时再 touch 不应再报 hadError
+	hadError, err = s.TouchSource(ctx, "qoder", "memory", "/q/a.md", run3.Unix()+1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hadError {
+		t.Fatal("want hadError=false when the source had no error")
 	}
 }
 

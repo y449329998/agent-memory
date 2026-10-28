@@ -42,23 +42,31 @@ ON CONFLICT(agent, kind, path) DO UPDATE SET
 
 // TouchSource 只刷新 last_seen_run：内容没变的源仍然要在本轮"露过面"，
 // 否则 stale 判定会把没变化的条目误判成已消失。
+// 同时清空 last_error——成功见到即代表之前的解析错误已恢复。
+// 返回的 hadError 是更新前的错误态，调用方据此决定要不要把因错误轮
+// 没露面而被标过时的条目复活（见 UnstaleBySource）。
 // 源行不存在时显式报错——静默成功会让编排层以为这一轮已经见过它。
-func (s *Store) TouchSource(ctx context.Context, agent, kind, path string, runAt int64) error {
-	res, err := s.db.ExecContext(ctx, `
-UPDATE source SET last_seen_run = ?, updated_at = ?
+//
+// 单连接纪律：先 SELECT 读旧错误态，读尽后再 UPDATE，不能边遍历 rows 边写。
+func (s *Store) TouchSource(ctx context.Context, agent, kind, path string, runAt int64) (bool, error) {
+	var lastError string
+	err := s.db.QueryRowContext(ctx, `
+SELECT last_error FROM source WHERE agent = ? AND kind = ? AND path = ?`,
+		agent, kind, path).Scan(&lastError)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, fmt.Errorf("touch source %s:%s: no such row", agent, path)
+	}
+	if err != nil {
+		return false, fmt.Errorf("touch source %s:%s: %w", agent, path, err)
+	}
+
+	if _, err := s.db.ExecContext(ctx, `
+UPDATE source SET last_seen_run = ?, last_error = '', updated_at = ?
 WHERE agent = ? AND kind = ? AND path = ?`,
-		runAt, time.Now().Unix(), agent, kind, path)
-	if err != nil {
-		return fmt.Errorf("touch source %s:%s: %w", agent, path, err)
+		runAt, time.Now().Unix(), agent, kind, path); err != nil {
+		return false, fmt.Errorf("touch source %s:%s: %w", agent, path, err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return fmt.Errorf("touch source %s:%s: no such row", agent, path)
-	}
-	return nil
+	return lastError != "", nil
 }
 
 // MarkSourceError 只登记错误，不动 content_hash 也不推进 last_seen_run。
