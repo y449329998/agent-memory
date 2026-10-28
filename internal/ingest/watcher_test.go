@@ -9,21 +9,6 @@ import (
 	"time"
 )
 
-func countCalls(t *testing.T, w *Watcher, d time.Duration) int {
-	t.Helper()
-	var calls int32
-	w.SetHandler(func(context.Context) { atomic.AddInt32(&calls, 1) })
-
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go w.Run(ctx)
-
-	time.Sleep(d)
-	cancel()
-	time.Sleep(50 * time.Millisecond)
-	return int(atomic.LoadInt32(&calls))
-}
-
 func TestWatcher_FiresOnFileCreate(t *testing.T) {
 	dir := t.TempDir()
 	w := NewWatcher(WatchConfig{
