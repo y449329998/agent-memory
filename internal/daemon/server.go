@@ -31,6 +31,8 @@ type Config struct {
 	// 简报预算与卡片数量由 serve 从配置带进来，handoff 端点不写死
 	BudgetTokens int
 	RecentCards  int
+	// Scan 由 cmdServe 注入「扫一轮 + 刷新简报」的编排；未注入时 /v1/scan 回 501。
+	Scan func(context.Context) (map[string]any, error)
 }
 
 // Server 是回环 HTTP 服务。它把 store 的能力摊成 JSON 接口，
@@ -43,6 +45,7 @@ type Server struct {
 
 func New(cfg Config, st *store.Store) *Server {
 	s := &Server{cfg: cfg, st: st, mux: http.NewServeMux()}
+	s.mux.HandleFunc("GET /{$}", s.handleIndex)
 	s.mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /v1/stats", s.auth(s.handleStats))
 	s.mux.HandleFunc("POST /v1/search", s.auth(s.handleSearch))
@@ -51,6 +54,9 @@ func New(cfg Config, st *store.Store) *Server {
 	s.mux.HandleFunc("GET /v1/handoff", s.auth(s.handleHandoff))
 	s.mux.HandleFunc("GET /v1/task", s.auth(s.handleListTasks))
 	s.mux.HandleFunc("POST /v1/project/resolve", s.auth(s.handleResolveProject))
+	s.mux.HandleFunc("POST /v1/scan", s.writeAuth(s.handleScan))
+	s.mux.HandleFunc("POST /v1/handoff", s.writeAuth(s.handleHandoffWrite))
+	s.mux.HandleFunc("POST /v1/memory/stale", s.writeAuth(s.handleSetStale))
 	s.mux.HandleFunc("POST /mcp", s.auth(s.handleMCP))
 	return s
 }
@@ -59,17 +65,23 @@ func (s *Server) Handler() http.Handler { return s.mux }
 
 type handlerFunc func(http.ResponseWriter, *http.Request)
 
+const bearerPrefix = "Bearer "
+
+// bearerToken 取 Authorization 头里的 Bearer token；页面路由与 auth 共用这一份解析。
+func bearerToken(r *http.Request) string {
+	got := r.Header.Get("Authorization")
+	if len(got) <= len(bearerPrefix) || !strings.HasPrefix(got, bearerPrefix) {
+		return ""
+	}
+	return got[len(bearerPrefix):]
+}
+
 // auth 校验 bearer token。只监听回环并不意味着安全：本机任何进程都能连 127.0.0.1，
 // 而库里存的是用户偏好与项目约束，所以仍然要令牌，且比较走常数时间。
 func (s *Server) auth(next handlerFunc) handlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		const prefix = "Bearer "
-		got := r.Header.Get("Authorization")
-		if len(got) <= len(prefix) || !strings.HasPrefix(got, prefix) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		if subtle.ConstantTimeCompare([]byte(got[len(prefix):]), []byte(s.cfg.Token)) != 1 {
+		token := bearerToken(r)
+		if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.Token)) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

@@ -16,14 +16,18 @@ import (
 	"github.com/muyi99/agent-memory/internal/store"
 )
 
-func newTestServer(t *testing.T) (*Server, *store.Store) {
+func newTestServer(t *testing.T, mutate ...func(*Config)) (*Server, *store.Store) {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "memory.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	s := New(Config{Token: "test-token-0123456789abcdef", DataDir: t.TempDir()}, st)
+	cfg := Config{Token: "test-token-0123456789abcdef", DataDir: t.TempDir()}
+	for _, m := range mutate {
+		m(&cfg)
+	}
+	s := New(cfg, st)
 	return s, st
 }
 

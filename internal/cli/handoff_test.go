@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/muyi99/agent-memory/internal/surface"
 )
 
 // isolateHomeWithRepo 把用户主目录与 Qoder home 指向同一个临时目录。
@@ -315,8 +317,8 @@ func TestIsProtectedAgentDir(t *testing.T) {
 		{filepath.Join(home, "code", "demo"), false},
 	}
 	for _, tc := range cases {
-		if got := IsProtectedAgentDir(tc.path); got != tc.want {
-			t.Fatalf("IsProtectedAgentDir(%q) = %v, want %v", tc.path, got, tc.want)
+		if got := surface.IsProtectedAgentDir(tc.path); got != tc.want {
+			t.Fatalf("surface.IsProtectedAgentDir(%q) = %v, want %v", tc.path, got, tc.want)
 		}
 	}
 }

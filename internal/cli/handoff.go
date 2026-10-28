@@ -44,7 +44,7 @@ func cmdHandoff(args []string, stdout, stderr io.Writer) int {
 	}
 	// 显式 --project 也可能指向 agent 自己的配置树；那里不是项目目录，
 	// 写 .agent-memory 会污染 agent 原生配置。跳过不是失败，退出码保持 0。
-	if IsProtectedAgentDir(abs) {
+	if surface.IsProtectedAgentDir(abs) {
 		fmt.Fprintf(stderr, "warn: 拒绝写入 agent 原生目录 %s\n", abs)
 		return 0
 	}
@@ -179,7 +179,7 @@ func refreshHandoffFiles(ctx context.Context, st *store.Store, cfg config.Config
 		}
 		wrote := false
 		for _, dir := range dirs {
-			if IsProtectedAgentDir(dir) {
+			if surface.IsProtectedAgentDir(dir) {
 				out = append(out, handoffRefresh{Key: project.Key, Warn: fmt.Sprintf("warn: 拒绝写入 agent 原生目录 %s", dir)})
 				continue
 			}
@@ -209,44 +209,6 @@ func refreshHandoffFiles(ctx context.Context, st *store.Store, cfg config.Config
 		}
 	}
 	return out
-}
-
-// protectedAgentDirs 是绝不能写入的 agent 原生配置目录（绝对路径）。
-// 覆盖各家 agent 在用户目录下的默认布局。
-func protectedAgentDirs(home string) []string {
-	return []string{
-		filepath.Join(home, ".qoder-cn"),
-		filepath.Join(home, ".qoder"),
-		filepath.Join(home, ".trae-cn"),
-		filepath.Join(home, ".trae"),
-		filepath.Join(home, ".workbuddy"),
-		filepath.Join(home, ".config", "opencode"),
-		filepath.Join(home, ".claude"),
-	}
-}
-
-// IsProtectedAgentDir 判断路径是否落在任何 agent 的原生配置目录里。
-// 命中意味着调用方可能把简报写进 agent 自己的配置树，必须拒绝。
-func IsProtectedAgentDir(path string) bool {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" || path == "" {
-		return false
-	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return false
-	}
-	abs = filepath.Clean(abs)
-	for _, dir := range protectedAgentDirs(home) {
-		rel, err := filepath.Rel(filepath.Clean(dir), abs)
-		if err != nil || filepath.IsAbs(rel) {
-			continue
-		}
-		if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
-			return true
-		}
-	}
-	return false
 }
 
 // refreshHandoffs 给每个有内容的项目重写简报，返回给 scan 打印的行。

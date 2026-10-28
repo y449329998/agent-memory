@@ -53,20 +53,29 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	adapters := buildAdapters(e.cfg)
+	scanOnce := newScanOnce(e.st, adapters, e.cfg, stdout)
+
 	srv := daemon.New(daemon.Config{
 		Token:        token,
 		DataDir:      e.cfg.DataDir,
 		Port:         *port,
 		BudgetTokens: e.cfg.Handoff.BudgetTokens,
 		RecentCards:  e.cfg.Handoff.RecentCards,
+		Scan: func(ctx context.Context) (map[string]any, error) {
+			res, err := scanOnce(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return scanResult(res), nil
+		},
 	}, e.st)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	adapters := buildAdapters(e.cfg)
 	if !*noWatch && len(adapters) > 0 {
-		go scanLoop(ctx, e.st, adapters, e.cfg, *debounce, resolvePollSeconds(*pollFlag, e.cfg.Scan.Interval), stdout)
+		go scanLoop(ctx, scanOnce, adapters, *debounce, resolvePollSeconds(*pollFlag, e.cfg.Scan.Interval), stdout)
 	}
 
 	fmt.Fprintf(stdout, "serve on 127.0.0.1 (token: %s)\n", e.cfg.TokenPath())
@@ -91,11 +100,46 @@ func resolvePollSeconds(flagValue int, interval time.Duration) int {
 	return seconds
 }
 
-// scanLoop 启动先扫一次，之后由监听事件驱动。扫描期间收到的事件靠 channel 合并成一次补扫。
-func scanLoop(ctx context.Context, st *store.Store, adapters []agent.Adapter, cfg config.Config, debounce time.Duration, pollSeconds int, stdout io.Writer) {
+// scanResult 把一轮扫描的汇总摊成 /v1/scan 的 JSON。
+func scanResult(res ingest.Result) map[string]any {
+	errs := res.Errors
+	if errs == nil {
+		errs = []string{}
+	}
+	return map[string]any{
+		"units": res.Units, "created": res.Created, "merged": res.Merged,
+		"unchanged": res.Unchanged, "staled": res.Staled,
+		"sessions": res.Sessions, "sessions_unchanged": res.SessionUnchanged,
+		"cards": res.Cards, "unsettled": res.SkippedUnsettled,
+		"errors": errs,
+	}
+}
+
+// newScanOnce 返回「扫一轮 + 刷新简报」的共享入口：serve 的启动/事件扫描与
+// Web UI 的 /v1/scan 都调它，避免两套编排漂移。内部用信号量串行化，
+// 事件扫描与手动触发撞车时排队，而不是并发争抢 SQLite。
+func newScanOnce(st *store.Store, adapters []agent.Adapter, cfg config.Config, stdout io.Writer) func(context.Context) (ingest.Result, error) {
 	runner := ingest.New(st, adapters...)
 	runner.SettleIdle = cfg.Handoff.SettleIdle
+	sem := make(chan struct{}, 1)
+	return func(ctx context.Context) (ingest.Result, error) {
+		select {
+		case sem <- struct{}{}:
+			defer func() { <-sem }()
+		case <-ctx.Done():
+			return ingest.Result{}, ctx.Err()
+		}
+		res, err := runner.Run(ctx, "")
+		if err != nil {
+			return res, err
+		}
+		refreshHandoffsFor(ctx, st, cfg, stdout)
+		return res, nil
+	}
+}
 
+// scanLoop 启动先扫一次，之后由监听事件驱动。扫描期间收到的事件靠 channel 合并成一次补扫。
+func scanLoop(ctx context.Context, scanOnce func(context.Context) (ingest.Result, error), adapters []agent.Adapter, debounce time.Duration, pollSeconds int, stdout io.Writer) {
 	dirs := watchDirs(adapters)
 	w := ingest.NewWatcher(ingest.WatchConfig{Dirs: dirs, Debounce: debounce, PollSeconds: pollSeconds})
 
@@ -108,8 +152,8 @@ func scanLoop(ctx context.Context, st *store.Store, adapters []agent.Adapter, cf
 	})
 	go w.Run(ctx)
 
-	scanOnce := func(reason string) {
-		res, err := runner.Run(ctx, "")
+	run := func(reason string) {
+		res, err := scanOnce(ctx)
 		if err != nil {
 			fmt.Fprintf(stdout, "scan %s error: %v\n", reason, err)
 			return
@@ -117,9 +161,8 @@ func scanLoop(ctx context.Context, st *store.Store, adapters []agent.Adapter, cf
 		if res.Created+res.Merged+res.Cards+res.Staled > 0 {
 			fmt.Fprintf(stdout, "scan (%s): %s\n", reason, res.String())
 		}
-		refreshHandoffsFor(ctx, st, cfg, stdout)
 	}
-	scanOnce("startup")
+	run("startup")
 
 	for {
 		select {
@@ -128,7 +171,7 @@ func scanLoop(ctx context.Context, st *store.Store, adapters []agent.Adapter, cf
 		case <-requested:
 			// watcher 已去过抖；这里再等一个窗口，把「保存到一半」的连续事件合并掉。
 			time.Sleep(debounce)
-			scanOnce("event")
+			run("event")
 		}
 	}
 }
