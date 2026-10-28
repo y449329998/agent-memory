@@ -20,6 +20,7 @@ func CanonicalText(s string) string {
 	s = norm.NFKC.String(s)
 	s = strings.ReplaceAll(s, "```", " ")
 	for {
+		s = strings.TrimSpace(s)
 		next := bulletRE.ReplaceAllString(s, "")
 		if next == s {
 			break

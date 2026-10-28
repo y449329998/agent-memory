@@ -51,3 +51,21 @@ func TestHashBytes_MatchesHashOfContent(t *testing.T) {
 		t.Fatal("HashBytes and Hash must agree")
 	}
 }
+
+func TestCanonicalText_IsIdempotentAcrossUnicodeWhitespace(t *testing.T) {
+	inputs := []string{
+		"\u2028- x",
+		"\u2029* y",
+		"\u0085+ z",
+		"\u00a0- 全角空格 bullet",
+		"- - 连续 bullet",
+		"普通文本",
+	}
+	for _, in := range inputs {
+		once := CanonicalText(in)
+		twice := CanonicalText(once)
+		if once != twice {
+			t.Fatalf("not idempotent for %q: first=%q second=%q", in, once, twice)
+		}
+	}
+}
