@@ -168,3 +168,34 @@ func TestRemoveJSONKey_OnlyRemovesOurs(t *testing.T) {
 		t.Fatal("second removal should be a no-op")
 	}
 }
+
+func TestBackupFile_DoesNotOverwriteWithinSameSecond(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp.json")
+	original := `{"mcpServers":{"other":{"command":"original-server"}}}`
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	first, err := backupFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 模拟同一秒内 link 之后又 unlink：文件内容已变
+	if err := os.WriteFile(path, []byte(`{"mcpServers":{"agent-memory":{}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	second, err := backupFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("second backup overwrote the first: %s", first)
+	}
+	kept, err := os.ReadFile(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(kept) != original {
+		t.Fatalf("original backup was clobbered: %q", kept)
+	}
+}

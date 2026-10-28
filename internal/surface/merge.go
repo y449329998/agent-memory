@@ -100,15 +100,35 @@ func jsonEqual(a, b any) bool {
 	return string(ab) == string(bb)
 }
 
+// backupFile 备份原文件并保证不覆盖既有备份。
+// 时间戳只到秒：同一秒内 link 后立刻 unlink 会命中同一个文件名，
+// 那会把「原始配置」的备份覆盖成「已链接」的版本，正是备份要防的事。
 func backupFile(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
 	stamp := time.Now().Format("20060102-150405")
-	target := fmt.Sprintf("%s.bak-%s", path, stamp)
-	if err := os.WriteFile(target, data, 0o600); err != nil {
-		return "", err
+	for i := 0; i < 100; i++ {
+		target := fmt.Sprintf("%s.bak-%s", path, stamp)
+		if i > 0 {
+			target = fmt.Sprintf("%s.bak-%s-%d", path, stamp, i)
+		}
+		f, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if os.IsExist(err) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if _, err := f.Write(data); err != nil {
+			f.Close()
+			return "", err
+		}
+		if err := f.Close(); err != nil {
+			return "", err
+		}
+		return target, nil
 	}
-	return target, nil
+	return "", fmt.Errorf("too many backups for %s in one second", path)
 }
