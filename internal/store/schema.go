@@ -1,11 +1,15 @@
 package store
 
-const schemaSQL = `
+// metaDDL 单独建表：Open 必须先读出 schema_version 完成校验，
+// 再执行 schemaSQL，避免在版本不兼容的库上改动表结构。
+const metaDDL = `
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+`
 
+const schemaSQL = `
 CREATE TABLE IF NOT EXISTS project (
   id           INTEGER PRIMARY KEY,
   key          TEXT NOT NULL UNIQUE,
