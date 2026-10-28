@@ -2,6 +2,7 @@ package qoder
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/muyi99/agent-memory/internal/domain"
@@ -104,5 +105,56 @@ func TestParseMemoryFile_IndentedColonInDescription(t *testing.T) {
 func TestParseMemoryFile_BlankFileIsSkipped(t *testing.T) {
 	if _, ok, err := ParseMemoryFile("/x/e.md", []byte("  \n\n")); err != nil || ok {
 		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+}
+
+func TestParseMemoryFile_StripsBOM(t *testing.T) {
+	content := "\ufeff---\nname: x\ndescription: 带 BOM\nmetadata:\n  type: user\n---\n\n正文\n"
+	got, ok, err := ParseMemoryFile("/x/bom.md", []byte(content))
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if got.Type != domain.TypePreference {
+		t.Fatalf("BOM broke frontmatter detection: type=%q text=%q", got.Type, got.Text)
+	}
+	if got.Text != "正文" {
+		t.Fatalf("text = %q", got.Text)
+	}
+}
+
+func TestParseMemoryFile_NormalizesCRLF(t *testing.T) {
+	content := "---\r\nmetadata:\r\n  type: feedback\r\n---\r\n\r\n第一段。\r\n\r\n第二段。\r\n"
+	got, ok, err := ParseMemoryFile("/x/crlf.md", []byte(content))
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if got.Type != domain.TypeConstraint {
+		t.Fatalf("type = %q", got.Type)
+	}
+	if strings.ContainsRune(got.Text, '\r') {
+		t.Fatalf("CR leaked into text: %q", got.Text)
+	}
+	if got.Text != "第一段。\n\n第二段。" {
+		t.Fatalf("text = %q", got.Text)
+	}
+}
+
+func TestParseMemoryFile_KeepsBalancedQuotesInDescription(t *testing.T) {
+	content := "---\ndescription: 关键设计: 请叫它 '预扣'\nmetadata:\n  type: project\n---\n\n"
+	got, ok, err := ParseMemoryFile("/x/q.md", []byte(content))
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if got.Text != "关键设计: 请叫它 '预扣'" {
+		t.Fatalf("description quotes damaged: %q", got.Text)
+	}
+
+	quoted := "---\ndescription: \"整段带引号\"\nmetadata:\n  type: project\n---\n\n"
+	got2, _, err := ParseMemoryFile("/x/q2.md", []byte(quoted))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got2.Text != "整段带引号" {
+		t.Fatalf("paired quotes should still be stripped: %q", got2.Text)
 	}
 }

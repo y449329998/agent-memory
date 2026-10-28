@@ -21,7 +21,11 @@ func ParseMemoryFile(path string, content []byte) (domain.MemoryDraft, bool, err
 	if strings.EqualFold(filepath.Base(path), "MEMORY.md") {
 		return domain.MemoryDraft{}, false, nil
 	}
-	text := strings.TrimSpace(string(content))
+	// BOM 会让首行的 "---" 认不出来，frontmatter 整个失效（Windows 编辑器常见）；
+	// CRLF 会把 \r 带进正文与哈希，这里统一成 LF。
+	raw := strings.TrimPrefix(string(content), "\ufeff")
+	raw = strings.ReplaceAll(raw, "\r\n", "\n")
+	text := strings.TrimSpace(raw)
 	if text == "" {
 		return domain.MemoryDraft{}, false, nil
 	}
@@ -93,5 +97,16 @@ func cutKey(line string) (key, value string, ok bool) {
 	if i <= 0 {
 		return "", "", false
 	}
-	return strings.TrimSpace(trimmed[:i]), strings.Trim(strings.TrimSpace(trimmed[i+1:]), `"'`), true
+	return strings.TrimSpace(trimmed[:i]), unquote(strings.TrimSpace(trimmed[i+1:])), true
+}
+
+// unquote 只剥「成对」的外层引号。原来是 Trim(v, `"'`)，会把
+// description 末尾本就属于内容的单引号一起剥掉（`'预扣'` → `'预扣`）。
+func unquote(v string) string {
+	if len(v) >= 2 {
+		if (v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'') {
+			return v[1 : len(v)-1]
+		}
+	}
+	return v
 }
