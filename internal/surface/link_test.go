@@ -70,6 +70,28 @@ func TestPlanLink_OpenCodeUsesLocalTypeAndCommandArray(t *testing.T) {
 	}
 }
 
+func TestPlanLink_OpenCodeEntryKeySetExact(t *testing.T) {
+	plan, err := PlanLink("opencode", LinkOptions{Binary: "/usr/local/bin/agent-memory", Token: "tok", Port: 47111})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// OpenCode 的 local MCP 实测只有 type/command/environment 三个键：
+	// 多一个（如 enabled）或少一个（把 environment 写成 env）都会让 token 不生效。
+	want := []string{"command", "environment", "type"}
+	if len(plan.MCPEntry) != len(want) {
+		t.Fatalf("opencode entry keys = %v, want exactly %v", plan.MCPEntry, want)
+	}
+	for _, k := range want {
+		if _, ok := plan.MCPEntry[k]; !ok {
+			t.Fatalf("opencode entry missing %q: %v", k, plan.MCPEntry)
+		}
+	}
+	env, ok := plan.MCPEntry["environment"].(map[string]string)
+	if !ok || env["AGENT_MEMORY_TOKEN"] != "tok" {
+		t.Fatalf("token must travel in environment, got %v", plan.MCPEntry["environment"])
+	}
+}
+
 func TestPlanLink_RejectsUnknownTarget(t *testing.T) {
 	if _, err := PlanLink("trae", LinkOptions{Binary: "x", Token: "t", Port: 1}); err == nil {
 		t.Fatal("trae must be refused until its config format is confirmed")

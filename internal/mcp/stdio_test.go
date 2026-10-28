@@ -79,6 +79,41 @@ func TestBridge_ReportsDaemonDownActionably(t *testing.T) {
 	}
 }
 
+func TestBridge_DaemonDownEchoesRequestID(t *testing.T) {
+	br := NewBridge(1, "t") // 端口 1 必然连不上
+	var out bytes.Buffer
+	if err := br.ServeStdio(context.Background(), strings.NewReader(`{"jsonrpc":"2.0","id":42,"method":"ping"}`+"\n"), &out); err != nil {
+		t.Fatal(err)
+	}
+	var msg struct {
+		ID    json.RawMessage `json:"id"`
+		Error map[string]any  `json:"error"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &msg); err != nil {
+		t.Fatalf("error reply must be valid json: %v\n%s", err, out.String())
+	}
+	// 客户端按 id 关联响应；回 null 会让它一直等到超时。
+	if string(msg.ID) != "42" {
+		t.Fatalf("reply id = %s, want 42", msg.ID)
+	}
+	text, _ := msg.Error["message"].(string)
+	if !strings.Contains(text, "agent-memory serve") {
+		t.Fatalf("error should tell the user what to run: %q", text)
+	}
+}
+
+func TestBridge_DaemonDownNotificationStaysSilent(t *testing.T) {
+	br := NewBridge(1, "t")
+	var out bytes.Buffer
+	if err := br.ServeStdio(context.Background(), strings.NewReader(`{"jsonrpc":"2.0","method":"notifications/initialized"}`+"\n"), &out); err != nil {
+		t.Fatal(err)
+	}
+	// 通知没有 id，JSON-RPC 不允许回包；传输失败时也不能回。
+	if out.Len() != 0 {
+		t.Fatalf("notification must not get an error reply, got %q", out.String())
+	}
+}
+
 func TestBridge_RejectsTokenMismatch(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)

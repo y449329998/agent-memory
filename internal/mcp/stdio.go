@@ -69,6 +69,22 @@ func (b *Bridge) Send(ctx context.Context, message []byte) ([]byte, bool, error)
 	return body, true, nil
 }
 
+// requestID 取入站消息的 id。缺失或 null 都是通知：JSON-RPC 2.0 规定
+// 通知没有 id，也绝不允许对通知回包。id 保持原始字节，数字/字符串都原样带回。
+func requestID(line []byte) json.RawMessage {
+	var env struct {
+		ID json.RawMessage `json:"id"`
+	}
+	if err := json.Unmarshal(line, &env); err != nil {
+		return nil
+	}
+	id := bytes.TrimSpace(env.ID)
+	if len(id) == 0 || bytes.Equal(id, []byte("null")) {
+		return nil
+	}
+	return id
+}
+
 // ServeStdio 读 stdin 的换行分隔 JSON-RPC 消息并转发。
 // 每行一条消息；空行忽略；读到的行超过 8MB 时报错并退出，避免内存被撑爆。
 func (b *Bridge) ServeStdio(ctx context.Context, in io.Reader, out io.Writer) error {
@@ -84,13 +100,18 @@ func (b *Bridge) ServeStdio(ctx context.Context, in io.Reader, out io.Writer) er
 		}
 		resp, needReply, err := b.Send(ctx, line)
 		if err != nil {
-			// 转发失败必须回一条 JSON-RPC error：静默让 agent 以为工具挂了并在原地重试
+			// 转发失败必须回一条 JSON-RPC error：静默让 agent 以为工具挂了并在原地重试。
+			// 但只回给请求；通知没有 id，回包反而违反协议。
+			id := requestID(line)
+			if len(id) == 0 {
+				continue
+			}
 			errMsg := err.Error()
 			if len(errMsg) > 500 {
 				errMsg = errMsg[:500]
 			}
 			body, _ := json.Marshal(map[string]any{
-				"jsonrpc": "2.0", "id": nil,
+				"jsonrpc": "2.0", "id": json.RawMessage(id),
 				"error": map[string]any{"code": CodeInternalError, "message": errMsg},
 			})
 			fmt.Fprintln(out, string(body))

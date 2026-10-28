@@ -93,22 +93,25 @@ func PlanLink(target string, opts LinkOptions) (Plan, error) {
 	return plan, nil
 }
 
-// stdioEntry 用 env 传 token：命令行参数会进 shell 历史与进程列表。
+// stdioEntry 用环境变量传 token：命令行参数会进 shell 历史与进程列表。
+// 两家 agent 的键名不同：Qoder/Claude 用 env，OpenCode 实测是 environment，
+// 且 OpenCode 的 local MCP 没有 enabled 键——写错键名 token 就不生效，全部 401。
 func stdioEntry(opts LinkOptions, openCode bool) map[string]any {
 	args := []string{"mcp", "--port", fmt.Sprint(opts.Port)}
-	entry := map[string]any{
-		"command": opts.Binary,
-		"args":    args,
-		"env":     map[string]string{"AGENT_MEMORY_TOKEN": opts.Token},
-	}
+	tokenEnv := map[string]string{"AGENT_MEMORY_TOKEN": opts.Token}
 	if openCode {
 		// OpenCode 的 local MCP 用 command 数组，不用 command+args 两段式
-		entry["type"] = "local"
-		entry["command"] = append([]string{opts.Binary}, args...)
-		delete(entry, "args")
-		entry["enabled"] = true
+		return map[string]any{
+			"type":        "local",
+			"command":     append([]string{opts.Binary}, args...),
+			"environment": tokenEnv,
+		}
 	}
-	return entry
+	return map[string]any{
+		"command": opts.Binary,
+		"args":    args,
+		"env":     tokenEnv,
+	}
 }
 
 func ApplyLink(plan Plan, opts LinkOptions) (Report, error) {
