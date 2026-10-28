@@ -51,6 +51,7 @@ func New(cfg Config, st *store.Store) *Server {
 	s.mux.HandleFunc("GET /v1/handoff", s.auth(s.handleHandoff))
 	s.mux.HandleFunc("GET /v1/task", s.auth(s.handleListTasks))
 	s.mux.HandleFunc("POST /v1/project/resolve", s.auth(s.handleResolveProject))
+	s.mux.HandleFunc("POST /mcp", s.auth(s.handleMCP))
 	return s
 }
 

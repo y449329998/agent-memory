@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -146,5 +147,13 @@ func TestListTaskCards_CarriesSessionTitle(t *testing.T) {
 	}
 	if sess.Title != "s9" {
 		t.Fatalf("title = %q", sess.Title)
+	}
+}
+
+func TestGetTaskCard_UnknownID(t *testing.T) {
+	s := openStore(t)
+	_, err := s.GetTaskCard(context.Background(), 4242)
+	if !errors.Is(err, domain.ErrTaskCardNotFound) {
+		t.Fatalf("want ErrTaskCardNotFound, got %v", err)
 	}
 }

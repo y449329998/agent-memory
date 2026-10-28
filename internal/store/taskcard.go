@@ -152,6 +152,16 @@ SELECT id, session_id, project_id, goal, status, decisions_json, files_json, com
 FROM task_card WHERE id = ?`, id))
 }
 
+// GetTaskCard 按 id 取任务卡。找不到返回 domain.ErrTaskCardNotFound，
+// 让 MCP 层能给出「没有这张卡」而不是把空白卡当成结果贴回去。
+func (s *Store) GetTaskCard(ctx context.Context, id int64) (domain.TaskCard, error) {
+	card, err := s.taskCardByID(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.TaskCard{}, domain.ErrTaskCardNotFound
+	}
+	return card, err
+}
+
 func scanTaskCard(row *sql.Row) (domain.TaskCard, error) {
 	var (
 		card      domain.TaskCard
