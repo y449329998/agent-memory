@@ -60,20 +60,19 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("读取访问令牌失败：%w", err)
 	}
 
-	var owned *exec.Cmd
 	port, running := findRunningDaemon(cfg)
 	if running {
 		logger.Printf("复用已在运行的 serve：端口 %d", port)
 	} else {
-		cmd, p, err := startServe(ctx, opts.SelfPath, cfg)
+		_, p, err := startServe(ctx, opts.SelfPath, cfg)
 		if err != nil {
 			logger.Printf("启动 serve 失败：%v", err)
-			return fmt.Errorf("启动共享记忆服务失败：%w", err)
+			return fmt.Errorf("启动共享记忆服务失败（端口 %d 可能被占用）：%w", preferredPort, err)
 		}
-		owned = cmd
 		port = p
-		logger.Printf("已启动内置 serve：端口 %d", port)
-		defer stopServe(owned, cfg, logger)
+		// 服务不随窗口退出：agent 的 MCP 调用不该因为用户关掉窗口就中断。
+		// 停服务请用任务管理器或重启机器；后续可加托盘菜单。
+		logger.Printf("已启动内置 serve：端口 %d（关窗后继续运行）", port)
 	}
 
 	link := buildURL(port, token)
@@ -154,11 +153,17 @@ func healthy(port int, timeout time.Duration) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
-// startServe 以 `selfPath --serve --port 0` 拉起自身作为 serve 子进程。
+// preferredPort 与 `link` 写进 agent 配置的端口保持一致：
+// 桌面版若随机取端口，MCP 桥会连不上写死端口的那份配置。
+const preferredPort = 47123
+
+// startServe 以 `selfPath --serve --port 47123` 拉起自身作为 serve 子进程。
+// 固定端口而不是随机端口，是为了与 link 生成的 MCP 配置对齐。
+// 子进程不绑定父进程的 ctx：窗口关闭后它要继续为 agent 的 MCP 调用服务。
 // 调用方必须确认没有健康实例在运行：这里会删掉可能残留的 port 文件。
 func startServe(ctx context.Context, selfPath string, cfg config.Config) (*exec.Cmd, int, error) {
-	return startServeWith(ctx, cfg, serveStartTimeout, func(ctx context.Context) (*exec.Cmd, error) {
-		cmd := exec.CommandContext(ctx, selfPath, "--serve", "--port", "0")
+	return startServeWith(ctx, cfg, serveStartTimeout, func(context.Context) (*exec.Cmd, error) {
+		cmd := exec.Command(selfPath, "--serve", "--port", fmt.Sprint(preferredPort))
 		prepareChild(cmd)
 		return cmd, nil
 	})
@@ -228,22 +233,6 @@ func terminateAndWait(cmd *exec.Cmd, done <-chan struct{}) {
 	}
 }
 
-// stopServe 只结束本进程拉起的 serve；复用已有实例时不会被调用。
-func stopServe(cmd *exec.Cmd, cfg config.Config, logger *log.Logger) {
-	if cmd == nil || cmd.Process == nil {
-		return
-	}
-	if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		logger.Printf("结束 serve 子进程失败：%v", err)
-	} else {
-		logger.Printf("已结束 serve 子进程 pid=%d", cmd.Process.Pid)
-	}
-	// 子进程被强杀时不会执行自己的清理，顺手抹掉它留下的 port 文件，
-	// 避免下一次 findRunningDaemon 读到过期端口。
-	_ = os.Remove(cfg.PortPath())
-}
-
-// buildURL 用 serve 的页面地址约定拼出带令牌的入口。
 func buildURL(port int, token string) string {
 	return fmt.Sprintf("http://127.0.0.1:%d/?token=%s", port, url.QueryEscape(token))
 }

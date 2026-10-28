@@ -21,9 +21,12 @@
 
 ```bash
 cd F:/go/agent-memory
-go build -o agent-memory.exe ./cmd/agent-memory
+go build -o agent-memory.exe ./cmd/agent-memory          # 命令行与服务
+go build -o agent-memory-app.exe ./cmd/agent-memory-app  # 桌面应用（双击用）
 ./agent-memory.exe init
 ```
+
+不用命令行的直接看第 10.5 节：双击 `agent-memory-app.exe` 即可。
 
 `init` 会创建 `~/.agent-memory/config.toml` 与 `memory.db`，并打印发现的 Qoder 目录。若自动发现不到：
 
@@ -34,7 +37,7 @@ go build -o agent-memory.exe ./cmd/agent-memory
 # home = 'C:\Users\You\.qoder-cn'
 ```
 
-环境要求：Go 1.22+、Windows/macOS/Linux；本项目在 Windows 10 + Go 1.22.6 上实测（`CGO_ENABLED=0`，使用纯 Go 的 SQLite 驱动）。
+环境要求：Go 1.22+、Windows/macOS/Linux；本项目在 Windows 10 + Go 1.22.6 上实测（`CGO_ENABLED=0`，使用纯 Go 的 SQLite 驱动）。桌面窗口依赖 Windows 自带的 WebView2 运行时（Win10/11 一般已安装）。
 
 ---
 
@@ -210,6 +213,7 @@ settle_idle = "5m"        # 会话文件静默多久算写完、可以出任务�
 | `~/.agent-memory/memory.db` | 共享库（SQLite，WAL；含 `-wal`/`-shm`） | `serve` / CLI |
 | `~/.agent-memory/token` | 访问令牌（0600） | 首次 `serve` / `link` / `mcp` |
 | `~/.agent-memory/port` | 运行中 daemon 的端口 | `serve` |
+| `~/.agent-memory/app.log` | 桌面应用与它拉起的 serve 的日志 | 桌面应用 |
 | `<项目>/.agent-memory/HANDOFF.md` | 交接简报 | `scan` / `handoff` / Web UI |
 | `<项目>/.git/info/exclude` | 加一行 `/.agent-memory/` | 首次写简报时 |
 | `~/.qoder-cn/mcp.json` 等 | MCP 配置 | **仅** `link`/`unlink` |
@@ -281,6 +285,31 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 - 安全：页面零外部依赖；所有动态内容用 `textContent` 插入（实测注入脚本不执行）；写接口除 Bearer 外要求 `Origin` 为本机同端口。
 
 ---
+
+## 10.5 桌面应用（不想用命令行就看这节）
+
+双击 `agent-memory-app.exe`，会打开一个标题为「agent-memory 共享记忆」的窗口，内容与 Web UI 相同。不需要浏览器、不需要记 token、不需要输命令。
+
+启动时它自己完成这些事：
+
+1. 没有 `~/.agent-memory/config.toml` 或库就自动创建；
+2. 检查后台服务是否已在运行——在运行就复用，没有就用固定端口 `47123` 拉起一个；
+3. 等健康检查通过后打开窗口，token 自动注入。
+
+生命周期：
+
+- **关掉窗口不会停止后台服务**：Qoder 等 agent 的 MCP 调用在窗口关闭后照常工作。后台服务会一直运行到关机，或你在任务管理器里结束 `agent-memory-app.exe`/`agent-memory.exe`。
+- 再次双击只是重新打开窗口，不会起第二个服务。
+- 如果 47123 被别的程序占用，会弹窗说明（不会静默换端口，否则 MCP 配置会对不上）。
+
+如果机器没有 WebView2 运行时，会自动改用 Edge/Chrome 的「应用窗口」模式，功能一致，只是任务栏图标显示为浏览器。
+
+出错时：
+
+- 弹窗给出原因；
+- 详细日志在 `~/.agent-memory/app.log`。
+
+想让它开机自动在后台运行，可以后面再加（计划任务或启动项），目前需要手动双击一次。
 
 ## 11. MCP 接入
 
@@ -379,6 +408,9 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 | `.git status` 里出现 `AGENTS.md` | 这是 `link` 安装的受管区块，是否提交由你决定 |
 | 想看某个源为什么失败 | `doctor` 的「解析失败的源」；修好后 `scan --full` |
 | 提示「拒绝写入 agent 原生目录」 | 该项目的 `primary_path` 落在 agent 配置目录里，属于保护行为，跳过即可 |
+| 双击桌面应用窗口没出现 | 看 `~/.agent-memory/app.log` 末尾；常见原因是 47123 被占用（会弹窗），或 WebView2 运行时缺失（会自动改用 Edge/Chrome 应用窗口） |
+| 关掉桌面窗口后 agent 用不了记忆 | 正常情况下服务会继续在后台跑（`netstat -ano | findstr 47123` 应能看到 LISTENING）；若没有，重新双击应用 |
+| 桌面应用与命令行 serve 谁在跑 | 两者是同一个服务，端口都是 47123；谁先起就复用谁，不会重复启动 |
 
 ---
 
