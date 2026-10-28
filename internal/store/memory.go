@@ -384,3 +384,78 @@ func (s *Store) PurgeStale(ctx context.Context) (int, error) {
 	}
 	return len(ids), nil
 }
+
+// MemoryFilter 是只读浏览用的过滤条件。与 SearchQuery 不同，它不做相关性排序，
+// 只按最近变更排；AllProjects 显式表示跨项目浏览，避免与「省略项目 = 用户级」混淆。
+type MemoryFilter struct {
+	ProjectID   int64
+	AllProjects bool
+	Scope       domain.Scope
+	Type        domain.MemoryType
+	Stale       *bool
+	Limit       int
+}
+
+func (s *Store) ListMemoriesFiltered(ctx context.Context, f MemoryFilter) ([]domain.MemoryItem, error) {
+	if f.Limit <= 0 || f.Limit > 500 {
+		f.Limit = 100
+	}
+	q := `SELECT id FROM memory_item WHERE 1=1`
+	args := []any{}
+	switch {
+	case f.AllProjects:
+	case f.ProjectID > 0:
+		q += ` AND (project_id = ? OR scope = ?)`
+		args = append(args, f.ProjectID, string(domain.ScopeUser))
+	default:
+		q += ` AND scope = ?`
+		args = append(args, string(domain.ScopeUser))
+	}
+	if f.Scope != "" {
+		q += ` AND scope = ?`
+		args = append(args, string(f.Scope))
+	}
+	if f.Type != "" {
+		q += ` AND type = ?`
+		args = append(args, string(f.Type))
+	}
+	if f.Stale != nil {
+		if *f.Stale {
+			q += ` AND stale = 1`
+		} else {
+			q += ` AND stale = 0`
+		}
+	}
+	q += ` ORDER BY last_seen_at DESC, id DESC LIMIT ?`
+	args = append(args, f.Limit)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make([]domain.MemoryItem, 0, len(ids))
+	for _, id := range ids {
+		m, err := s.MemoryByID(ctx, id)
+		if errors.Is(err, domain.ErrMemoryNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, nil
+}

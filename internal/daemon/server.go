@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -274,16 +275,37 @@ func (s *Server) handleAddMemory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListMemory(w http.ResponseWriter, r *http.Request) {
-	projectRef := r.URL.Query().Get("project_path")
-	if projectRef == "" {
-		projectRef = r.URL.Query().Get("project_key")
+	ctx := r.Context()
+	q := r.URL.Query()
+
+	filter := store.MemoryFilter{
+		AllProjects: q.Get("all") == "1",
+		Scope:       domain.Scope(q.Get("scope")),
+		Type:        domain.MemoryType(q.Get("type")),
 	}
-	projectID, err := s.projectIDFromRequest(r.Context(), projectRef, projectRef)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	if v := q.Get("stale"); v == "1" || v == "0" {
+		stale := v == "1"
+		filter.Stale = &stale
 	}
-	items, err := s.st.ListMemories(r.Context(), projectID, r.URL.Query().Get("include_stale") == "true", 50)
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			filter.Limit = n
+		}
+	}
+	ref := q.Get("project_path")
+	if ref == "" {
+		ref = q.Get("project_key")
+	}
+	if !filter.AllProjects && ref != "" {
+		id, err := s.projectIDFromRequest(ctx, ref, ref)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		filter.ProjectID = id
+	}
+
+	items, err := s.st.ListMemoriesFiltered(ctx, filter)
 	if err != nil {
 		httpError(w, err)
 		return
