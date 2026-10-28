@@ -468,6 +468,42 @@ func TestRun_ErrorRecoveryRevivesStaleItemsAndClearsLastError(t *testing.T) {
 		mustInt(t, s, `SELECT count(*) FROM source WHERE last_error <> ''`))
 }
 
+// TestRun_MemoryDirReadErrorIsNotAnEmptyScan 回归 I7：home/memory 读失败时
+// 不能让 Runner 以为该 agent 扫描成功，否则 MarkStaleForRun 找不到任何露面来源，
+// 会把上一轮导入的记忆全部标成 stale，而 Errors 还是空的。
+func TestRun_MemoryDirReadErrorIsNotAnEmptyScan(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, ".qoder-cn")
+	write(t, filepath.Join(home, "memory", "user.md"), "---\nmetadata:\n  type: user\n---\n\n先正常导入一条。\n")
+
+	s := openTempStore(t)
+	r := New(s, qoder.New(home))
+	if _, err := r.Run(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	id := mustInt(t, s, `SELECT id FROM memory_item`)
+
+	// 把 memory 目录换成同名文件：ReadDir 会报错，不能当成空目录。
+	if err := os.RemoveAll(filepath.Join(home, "memory")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(home, "memory"), "not a dir")
+
+	res, err := r.Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Errors) == 0 {
+		t.Fatal("directory read failure must be reported, not swallowed as an empty scan")
+	}
+	if res.Staled != 0 {
+		t.Fatalf("staled = %d, want 0（读失败的一轮不能把旧记忆标成 stale）", res.Staled)
+	}
+	if got := mustInt(t, s, `SELECT stale FROM memory_item WHERE id = ?`, id); got != 0 {
+		t.Fatalf("旧记忆被误标 stale: %d", got)
+	}
+}
+
 func TestResult_StringIsReadable(t *testing.T) {
 	got := Result{Units: 4, Created: 2, Merged: 1, Unchanged: 1, Staled: 0}.String()
 	for _, want := range []string{"units=4", "created=2", "merged=1", "unchanged=1", "staled=0"} {

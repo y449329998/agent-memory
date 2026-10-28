@@ -47,13 +47,15 @@ func TaskCard(sess domain.Session, events []domain.SessionEvent, now time.Time) 
 
 	var goals []string
 	var lastAssistant string
+	lastAssistantIdx := -1
+	lastCommandIdx := -1
 	var questions []string
 	var errors []string
 	filesSeen := map[string]bool{}
 	cmdsSeen := map[string]bool{}
 	errTail := 0
 
-	for _, e := range events {
+	for i, e := range events {
 		switch e.Kind {
 		case domain.KindUserText:
 			if e.Text == "" {
@@ -69,6 +71,7 @@ func TaskCard(sess domain.Session, events []domain.SessionEvent, now time.Time) 
 				continue
 			}
 			lastAssistant = e.Text
+			lastAssistantIdx = i
 			if isQuestion(e.Text) {
 				questions = appendUnique(questions, clip(e.Text, maxQuestionRunes), 6)
 			}
@@ -83,6 +86,7 @@ func TaskCard(sess domain.Session, events []domain.SessionEvent, now time.Time) 
 			if e.Text == "" {
 				continue
 			}
+			lastCommandIdx = i
 			if !cmdsSeen[e.Text] {
 				cmdsSeen[e.Text] = true
 				card.Commands = appendUnique(card.Commands, e.Text, 20)
@@ -104,12 +108,17 @@ func TaskCard(sess domain.Session, events []domain.SessionEvent, now time.Time) 
 
 	// 状态判定只看事件尾部：连续失败且其后没有成功动作 → blocked；
 	// 出现验证通过类结论 → done；其余 → doing。
+	// 验证结论必须落在最后一次命令之后：更早的「测试通过」证明不了当前版本。
 	errTail = trailingErrorRun(events)
+	verification := ""
+	if lastAssistantIdx > lastCommandIdx {
+		verification = lastAssistant
+	}
 	switch {
 	case errTail >= 2:
 		card.Status = domain.StatusBlocked
 		card.NextSteps = "未解决的报错：" + clip(errorsTail(errors, maxNextRunes), maxNextRunes)
-	case verified(lastAssistant, card.Commands):
+	case verified(verification, card.Commands):
 		card.Status = domain.StatusDone
 		card.NextSteps = clip(lastAssistant, maxNextRunes)
 	default:
@@ -137,12 +146,21 @@ func trailingErrorRun(events []domain.SessionEvent) int {
 	return n
 }
 
-// verified 判定「有验证且通过了」。规则很窄：只有末条 assistant 文本里
-// 出现通过类措辞，且这场会话确实跑过命令，才算 done。
-// 光有「我改好了」不算——那是最容易骗人的话。
+// verified 判定「最后一条命令之后，assistant 明确说了验证通过」。
+// 规则很窄：只有末条 assistant 文本里出现通过类措辞，且这场会话确实跑过命令，
+// 才算 done。光有「我改好了」不算——那是最容易骗人的话。
+//
+// 否定/失败措辞优先：同一段文本里出现「未验证 / 没通过 / 失败 / FAIL …」时，
+// 即使也带了「通过」字样也不判 done。「测试通过率 60%，PASS 3 个，FAIL 2 个」
+// 这类汇报最容易被误读成完成。
 func verified(lastAssistant string, commands []string) bool {
-	if len(commands) == 0 {
+	if len(commands) == 0 || lastAssistant == "" {
 		return false
+	}
+	for _, marker := range []string{"未通过", "没有通过", "没通过", "没验证", "未验证", "失败", "FAIL", "报错", "超时"} {
+		if strings.Contains(lastAssistant, marker) {
+			return false
+		}
 	}
 	for _, marker := range []string{"测试通过", "全部通过", "验证通过", "已通过测试", "PASS", "通过验证"} {
 		if strings.Contains(lastAssistant, marker) {

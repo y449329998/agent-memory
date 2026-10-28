@@ -28,8 +28,6 @@ func dirExists(p string) bool {
 	return err == nil && st.IsDir()
 }
 
-const sessionScanMaxLines = 500
-
 // ProjectPathFromSessions 反查一个 Qoder projects/<slug> 目录对应的真实工作目录。
 // 会话 JSONL 里的 workspace-directories 行是权威来源；找不到时退回 slug 反解并标 low。
 func ProjectPathFromSessions(projectDir string) (path string, confidence string) {
@@ -63,7 +61,9 @@ func firstWorkspaceDir(path string) (string, bool) {
 	scanner := bufio.NewScanner(f)
 	// 单行可能是几十 KB 的技能正文，甚至几 MB；默认 64KB 上限会直接报 too long。
 	scanner.Buffer(make([]byte, 0, 256*1024), 16*1024*1024)
-	for n := 0; n < sessionScanMaxLines && scanner.Scan(); n++ {
+	// 扫到命中或 EOF：workspace 行可能被很长的技能正文挤到几千行之后，
+	// 截断行数会让记忆与会话各自解析出不同的项目路径。
+	for scanner.Scan() {
 		line := scanner.Bytes()
 		if !bytes.Contains(line, []byte("workspace-directories")) {
 			continue

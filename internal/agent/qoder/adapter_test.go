@@ -140,6 +140,21 @@ func TestAdapter_SkipsProjectDirsWithoutMemoryDir(t *testing.T) {
 	}
 }
 
+// TestAdapter_ScanMemoryUnitsPropagatesUnreadableMemoryDir 回归 I7：
+// memory 路径读失败不能被吞成「空扫描」，否则 Runner 会把该 agent 当成本轮扫过，
+// 上一轮导入的记忆全部被 MarkStaleForRun 误标 stale。
+func TestAdapter_ScanMemoryUnitsPropagatesUnreadableMemoryDir(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, ".qoder-cn")
+	mustMkdirAll(t, home)
+	// memory 是文件而非目录：ReadDir 必然报错，而不是返回空列表。
+	writeFile(t, filepath.Join(home, "memory"), "not a dir")
+
+	if _, err := New(home).ScanMemoryUnits(context.Background()); err == nil {
+		t.Fatal("unreadable memory dir must surface an error, not look like an empty scan")
+	}
+}
+
 func mustMkdirAll(t *testing.T, p string) {
 	t.Helper()
 	if err := os.MkdirAll(p, 0o755); err != nil {

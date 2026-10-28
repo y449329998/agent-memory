@@ -1,8 +1,10 @@
 package qoder
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -75,6 +77,29 @@ func TestProjectPathFromSessions_SkipsHugeLinesBeyondBuffer(t *testing.T) {
 	got, conf := ProjectPathFromSessions(dir)
 	if conf != "high" || filepath.Clean(got) != filepath.Clean(target) {
 		t.Fatalf("3MB 行不应被丢弃: got %q conf=%q", got, conf)
+	}
+}
+
+// TestProjectPathFromSessions_FindsWorkspaceLineBeyondOldLimit 回归 I6：
+// 旧实现在第 500 行截断，导致这里只反解出 low；而会话解析是全文扫描，
+// 同一条会话的 ProjectPath 却是 high，记忆与会话被拆到两个项目。
+func TestProjectPathFromSessions_FindsWorkspaceLineBeyondOldLimit(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(t.TempDir(), "repo601")
+	mk(t, target)
+
+	var b strings.Builder
+	for i := 0; i < 600; i++ {
+		fmt.Fprintf(&b, "{\"type\":\"user\",\"sessionId\":\"s1\",\"index\":%d}\n", i)
+	}
+	b.WriteString("{\"type\":\"workspace-directories\",\"sessionId\":\"s1\",\"directories\":[\"" + jsonEscape(target) + "\"]}\n")
+	if err := os.WriteFile(filepath.Join(dir, "s1.jsonl"), []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, conf := ProjectPathFromSessions(dir)
+	if conf != "high" || filepath.Clean(got) != filepath.Clean(target) {
+		t.Fatalf("workspace 行在第 601 行也必须命中: got %q conf=%q", got, conf)
 	}
 }
 

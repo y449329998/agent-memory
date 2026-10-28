@@ -22,7 +22,11 @@ func (a *Adapter) Name() string { return "qoder" }
 func (a *Adapter) ScanMemoryUnits(ctx context.Context) ([]agent.MemoryUnit, error) {
 	var units []agent.MemoryUnit
 
-	units = append(units, a.scanFlat(ctx, filepath.Join(a.Home, "memory"), domain.ScopeUser, "", "", "high")...)
+	userUnits, err := a.scanFlat(ctx, filepath.Join(a.Home, "memory"), domain.ScopeUser, "", "", "high")
+	if err != nil {
+		return units, err
+	}
+	units = append(units, userUnits...)
 
 	projectsDir := filepath.Join(a.Home, "projects")
 	entries, err := os.ReadDir(projectsDir)
@@ -48,16 +52,33 @@ func (a *Adapter) ScanMemoryUnits(ctx context.Context) ([]agent.MemoryUnit, erro
 		}
 		// 只有带会话的项目目录才给出可信路径；这里拿不到就别硬猜
 		realPath, confidence := ProjectPathFromSessions(projectDir)
-		units = append(units, a.scanFlat(ctx, memoryDir, domain.ScopeProject, realPath, name, confidence)...)
+		projectUnits, err := a.scanFlat(ctx, memoryDir, domain.ScopeProject, realPath, name, confidence)
+		if err != nil {
+			return units, err
+		}
+		units = append(units, projectUnits...)
 	}
 	return units, nil
 }
 
-func (a *Adapter) scanFlat(ctx context.Context, dir string, scope domain.Scope, projectPath, slug, confidence string) []agent.MemoryUnit {
+// scanFlat 读一个平铺的 memory 目录。目录不存在是正常情况（该 agent 没建过记忆），
+// 返回空；其余读错误必须上抛——吞成空扫描会让 Runner 以为该 agent 本轮扫过，
+// 随后把上一轮导入的记忆全部误标 stale。
+func (a *Adapter) scanFlat(ctx context.Context, dir string, scope domain.Scope, projectPath, slug, confidence string) ([]agent.MemoryUnit, error) {
 	var out []agent.MemoryUnit
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return out
+		if os.IsNotExist(err) {
+			// Windows 上「同名文件代替目录」的 ReadDir 也报 path-not-found；
+			// 用 Stat 区分路径真的缺失（正常空目录）与存在但不可读。
+			if _, statErr := os.Stat(dir); statErr == nil {
+				return nil, err
+			} else if !os.IsNotExist(statErr) {
+				return nil, statErr
+			}
+			return nil, nil
+		}
+		return nil, err
 	}
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
@@ -70,7 +91,7 @@ func (a *Adapter) scanFlat(ctx context.Context, dir string, scope domain.Scope, 
 
 	for _, name := range names {
 		if err := ctx.Err(); err != nil {
-			return out
+			return out, err
 		}
 		path := filepath.Join(dir, name)
 		unit := agent.MemoryUnit{Path: path}
@@ -103,7 +124,7 @@ func (a *Adapter) scanFlat(ctx context.Context, dir string, scope domain.Scope, 
 		unit.Drafts = []domain.MemoryDraft{draft}
 		out = append(out, unit)
 	}
-	return out
+	return out, nil
 }
 
 func isMarkdown(name string) bool {

@@ -84,6 +84,66 @@ func TestTaskCard_StatusDoneOnVerificationAfterSuccess(t *testing.T) {
 	}
 }
 
+// TestTaskCard_StatusDoneOnlyForUnnegatedVerificationAfterLastCommand 回归 I8：
+// done 不能只看「末条 assistant 文本里出现通过类措辞」，还要排除否定/失败汇报，
+// 并要求这句话在最后一次命令之后。
+func TestTaskCard_StatusDoneOnlyForUnnegatedVerificationAfterLastCommand(t *testing.T) {
+	cases := []struct {
+		name   string
+		events []domain.SessionEvent
+		want   string
+	}{
+		{
+			name: "否定优先：还没验证通过",
+			events: []domain.SessionEvent{
+				ev(1, domain.KindUserText, "修复扣减逻辑"),
+				ev(2, domain.KindToolCommand, "go test ./..."),
+				ev(3, domain.KindAssistant, "还没验证通过，先别合并"),
+			},
+			want: domain.StatusDoing,
+		},
+		{
+			name: "PASS 与 FAIL 同时出现",
+			events: []domain.SessionEvent{
+				ev(1, domain.KindUserText, "跑全部用例"),
+				ev(2, domain.KindToolCommand, "go test ./..."),
+				ev(3, domain.KindAssistant, "测试通过率 60%，PASS 3 个，FAIL 2 个"),
+			},
+			want: domain.StatusDoing,
+		},
+		{
+			name: "正常通过",
+			events: []domain.SessionEvent{
+				ev(1, domain.KindUserText, "修复扣减逻辑"),
+				ev(2, domain.KindToolCommand, "go test ./..."),
+				ev(3, domain.KindAssistant, "跑完测试，测试通过"),
+			},
+			want: domain.StatusDone,
+		},
+		{
+			name: "通过出现在最后一次命令之前",
+			events: []domain.SessionEvent{
+				ev(1, domain.KindUserText, "修复扣减逻辑"),
+				ev(2, domain.KindToolCommand, "go test ./..."),
+				ev(3, domain.KindAssistant, "测试通过"),
+				ev(4, domain.KindToolCommand, "go vet ./..."),
+			},
+			want: domain.StatusDoing,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			card, ok := TaskCard(domain.Session{ID: 1}, tc.events, time.Now())
+			if !ok {
+				t.Fatal("want a card")
+			}
+			if card.Status != tc.want {
+				t.Fatalf("status = %q want %q", card.Status, tc.want)
+			}
+		})
+	}
+}
+
 func TestTaskCard_StatusDoingWhenWorkRemains(t *testing.T) {
 	events := []domain.SessionEvent{
 		ev(1, domain.KindUserText, "实现导出功能"),
