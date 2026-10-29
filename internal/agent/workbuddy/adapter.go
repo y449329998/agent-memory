@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
+	"time"
 
 	"github.com/muyi99/agent-memory/internal/agent"
 	"github.com/muyi99/agent-memory/internal/domain"
@@ -12,10 +14,21 @@ import (
 // homeDirName 是 WorkBuddy 的用户级配置目录名。
 const homeDirName = ".workbuddy"
 
-// Adapter 读 WorkBuddy 的用户级记忆。Home 是 WorkBuddy 配置根（含 MEMORY.md）。
-// USER.md / SOUL.md / IDENTITY.md 是 persona 模板，不属于可导入记忆。
+// Adapter 读 WorkBuddy 的记忆与会话。Home 是 WorkBuddy 配置根（含 MEMORY.md、
+// projects/、tasks/）。USER.md / SOUL.md / IDENTITY.md 是 persona 模板，不属于可导入记忆。
 type Adapter struct {
 	Home string
+
+	mu      sync.Mutex
+	session map[string]sessionCacheEntry
+}
+
+type sessionCacheEntry struct {
+	size   int64
+	mtime  time.Time
+	hash   string
+	sess   domain.Session
+	events []agent.SessionEvent
 }
 
 var (
@@ -31,10 +44,10 @@ func (a *Adapter) Name() string { return "workbuddy" }
 // 这个 agent 只靠 30 秒轮询兜底。
 func (a *Adapter) WatchDirs() []string { return nil }
 
-// ScanSessionUnits: WorkBuddy 的对话在远端/IndexedDB，本地只有会话索引，
-// 本期不导入会话。
+// ScanSessionUnits: WorkBuddy 的对话落在 ~/.workbuddy/projects/<项目>/<会话>.jsonl，
+// 只导入带有 TodoWrite 清单（tasks/<会话>/）的会话；没有任务清单的闲聊不产生任务卡。
 func (a *Adapter) ScanSessionUnits(ctx context.Context) ([]agent.SessionUnit, error) {
-	return nil, nil
+	return a.scanSessions(ctx)
 }
 
 // ScanMemoryUnits 只读 <Home>/MEMORY.md。文件不存在或没有可导入条目时返回空；

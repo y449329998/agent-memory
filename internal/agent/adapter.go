@@ -23,8 +23,11 @@ type MemoryUnit struct {
 
 // SessionUnit 是一个会话源文件及其解析结果。
 type SessionUnit struct {
-	Path    string
+	Path string
+	// Content 为空时由 Hash 提供内容哈希：WorkBuddy 会话动辄几十 MB，
+	// 适配器流式解析后只回传哈希，避免把整份原文留在内存里。
 	Content []byte
+	Hash    string
 	MTime   time.Time
 	Size    int64
 	// Session 的 ProjectPath/ProjectSlug/Confidence 由适配器填；ProjectID 由 ingest 解析。

@@ -42,6 +42,25 @@ func TestTaskCard_GoalIsFirstRealUserTextAndCorrectionsAppend(t *testing.T) {
 	}
 }
 
+func TestTaskCard_DuplicateUserTextAppearsOnce(t *testing.T) {
+	events := []domain.SessionEvent{
+		ev(1, domain.KindUserText, "梳理绩效方案"),
+		ev(2, domain.KindAssistant, "先看代码"),
+		ev(3, domain.KindUserText, "梳理绩效方案"),
+		ev(4, domain.KindUserText, "补充导出功能"),
+	}
+	card, ok := TaskCard(domain.Session{ID: 1}, events, time.Now())
+	if !ok {
+		t.Fatal("want a card")
+	}
+	if got := strings.Count(card.Goal, "梳理绩效方案"); got != 1 {
+		t.Fatalf("goal repeated %d times: %q", got, card.Goal)
+	}
+	if !strings.Contains(card.Goal, "补充导出功能") {
+		t.Fatalf("later distinct goal lost: %q", card.Goal)
+	}
+}
+
 func TestTaskCard_StatusBlockedWhenTrailingErrorsUnresolved(t *testing.T) {
 	events := []domain.SessionEvent{
 		ev(1, domain.KindUserText, "修复扣减逻辑"),

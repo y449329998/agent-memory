@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"strings"
 	"time"
 
@@ -203,7 +205,10 @@ func (r *Runner) Run(ctx context.Context, onlyAgent string) (Result, error) {
 
 			// 会话与记忆共用同一套源门控：内容没变就只登记「本轮见过」，
 			// 不重写会话与事件（事件整体替换的代价高，且会丢掉已有的卡）。
-			hash := normalize.HashBytes(u.Content)
+			hash := u.Hash
+			if hash == "" {
+				hash = normalize.HashBytes(u.Content)
+			}
 			prev, seen, err := r.store.SourceHash(ctx, a.Name(), "session", u.Path)
 			if err != nil {
 				return res, err
@@ -224,9 +229,13 @@ func (r *Runner) Run(ctx context.Context, onlyAgent string) (Result, error) {
 				continue
 			}
 
-			projectID, err := r.resolveProject(ctx, a.Name(), u.Session.ProjectSlug, u.Session.ProjectPath, u.Session.Confidence, at)
+			projectID, err := r.resolveSessionProject(ctx, a.Name(), u.Session.ProjectSlug, u.Session.ProjectPath, u.Session.Confidence, at)
 			if err != nil {
 				res.Errors = append(res.Errors, fmt.Sprintf("%s: project: %v", u.Path, err))
+				continue
+			}
+			if projectID == 0 {
+				// 工作区已不存在且没有历史路径映射：留着会话只会建出一个幽灵项目。
 				continue
 			}
 
@@ -360,7 +369,30 @@ func (r *Runner) projectForDraft(ctx context.Context, drafts []domain.MemoryDraf
 	return r.resolveProject(ctx, d.SourceAgent, d.ProjectSlug, d.ProjectPath, d.Confidence, at)
 }
 
-// resolveProject 是记忆与会话共用的项目归属逻辑。
+// resolveSessionProject 在记忆的项目归属之上多一道「工作区还在不在」的检查：
+// 会话指向的目录已删除时，只允许命中 project_path 里的历史映射（项目搬迁的旧写法），
+// 不新建项目。返回 0 表示这条会话没有可归属的项目，调用方跳过即可。
+func (r *Runner) resolveSessionProject(ctx context.Context, agent, slug, path, confidence string, at time.Time) (int64, error) {
+	if confidence == "high" && path != "" {
+		if st, err := os.Stat(path); err != nil || !st.IsDir() {
+			if err != nil && !errors.Is(err, fs.ErrNotExist) {
+				// 权限/网络盘临时不可用：继续按普通路径解析，不能把会话丢掉。
+				return r.resolveProject(ctx, agent, slug, path, confidence, at)
+			}
+			id, ok, err := r.store.ResolveProjectByPath(ctx, path)
+			if err != nil {
+				return 0, err
+			}
+			if !ok {
+				return 0, nil
+			}
+			return id, nil
+		}
+	}
+	return r.resolveProject(ctx, agent, slug, path, confidence, at)
+}
+
+// resolveProject 是记忆与会话的通用项目归属逻辑。
 //
 // 低置信（只有 slug 反解出来的路径）时故意建一个 agent 专有的独立项目，
 // 并且不写 project_path 映射：slug 里的 '-' 既可能是层级分隔符也可能是项目名的一部分，

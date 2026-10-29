@@ -64,7 +64,7 @@ func TaskCard(sess domain.Session, events []domain.SessionEvent, now time.Time) 
 			if len(goals) == 0 {
 				goals = append(goals, clip(e.Text, maxGoalRunes))
 			} else if len(goals) < 4 {
-				goals = append(goals, clip(e.Text, maxItemRunes))
+				goals = appendUnique(goals, clip(e.Text, maxItemRunes), 4)
 			}
 		case domain.KindAssistant:
 			if e.Text == "" {

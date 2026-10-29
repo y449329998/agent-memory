@@ -6,7 +6,7 @@
 
 ## 1. 它解决什么
 
-你在 Qoder / Trae / WorkBuddy / OpenCode 之间切换时，每个 agent 各存一份记忆与历史，互不可见。agent-memory 把 Qoder 的长期记忆与会话历史、Trae 与 WorkBuddy 的记忆文件读进一个本地共享库：
+你在 Qoder / Trae / WorkBuddy / OpenCode 之间切换时，每个 agent 各存一份记忆与历史，互不可见。agent-memory 把 Qoder 的长期记忆与会话历史、WorkBuddy 带任务清单的本地会话、Trae 与 WorkBuddy 的记忆文件读进一个本地共享库：
 
 - 记忆去重后统一检索（中文两字词可命中）
 - 会话提炼成任务卡（目标 / 状态 / 改动文件 / 下一步 / 未决问题）
@@ -53,7 +53,7 @@ go build -ldflags "-H windowsgui" -o agent-memory-app.exe ./cmd/agent-memory-app
 ./agent-memory.exe link qoder --project .             # 真正接入
 ```
 
-`scan` 按 qoder → trae → workbuddy 的固定顺序读三家：Qoder 读 `~/.qoder-cn/memory`、`projects/*/memory` 与会话 jsonl；Trae 读 `~/.trae-cn/memory`（含 `projects/<项目>/project_memory.md`）与 `user_rules/`，并用 `%APPDATA%\Trae CN\User\workspaceStorage` 把项目目录名映射回真实路径；WorkBuddy 只读 `~/.workbuddy/MEMORY.md`。Trae 与 WorkBuddy 都没有会话可导入。
+`scan` 按 qoder → trae → workbuddy 的固定顺序读三家：Qoder 读 `~/.qoder-cn/memory`、`projects/*/memory` 与会话 jsonl；Trae 读 `~/.trae-cn/memory`（含 `projects/<项目>/project_memory.md`）与 `user_rules/`，并用 `%APPDATA%\Trae CN\User\workspaceStorage` 把项目目录名映射回真实路径；WorkBuddy 读 `~/.workbuddy/MEMORY.md`，并导入 `projects/<项目>/<会话>.jsonl` 里带任务清单（`tasks/<会话>/`）的本地会话，用来生成任务卡。Trae 的会话正文在云端，`state.vscdb` 只有界面状态，因此只导入记忆。
 
 浏览器打开 `http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>` 即 Web UI。
 
@@ -138,7 +138,7 @@ agent-memory serve [--port 47123] [--poll 30] [--debounce 2s] [--no-watch]
 - 只监听 `127.0.0.1`，用 `~/.agent-memory/token` 做 Bearer 鉴权；端口写入 `~/.agent-memory/port`，退出时删除。
 - `--port 0` 系统分配随机端口；**换端口后要重新 `link`**（MCP 配置里写死了端口）。
 - `--poll` 轮询兜底间隔（0 表示用配置 `[scan] interval`）；`--debounce` 事件去抖窗口。
-- 监听目录只覆盖记忆源：qoder 的 `memory/`、`projects/`，trae 的 `memory/`、`user_rules/`（去重后交给 watcher）；WorkBuddy 不监听，只靠 `--poll` 兜底。
+- 监听目录只覆盖记忆源：qoder 的 `memory/`、`projects/`，trae 的 `memory/`、`user_rules/`（去重后交给 watcher）；WorkBuddy 不监听，会话与任务清单的变化只靠 `--poll` 兜底。
 - `--no-watch` 只开服务不扫描（调试用），此时 `POST /v1/scan` 仍可用。
 - 已在运行（同端口健康检查通过）时拒绝启动；但用不同 `--port` 可以起第二个实例——**不要这样用**，两个进程会重复扫描同一库。
 
@@ -238,7 +238,7 @@ settle_idle = "5m"        # 会话文件静默多久算写完、可以出任务�
 | `~/.qoder-cn/mcp.json` 等 | MCP 配置 | **仅** `link`/`unlink` |
 | `<项目>/AGENTS.md` 或 `CLAUDE.md` | 受管区块 | **仅** `link`/`unlink` |
 
-Trae 与 WorkBuddy 的原生目录（`~/.trae-cn`、`%APPDATA%\Trae CN\User\workspaceStorage`、`~/.workbuddy`）**只读**：`scan` 只做 `os.ReadDir` / `os.ReadFile` / `os.Stat`，不会在其中创建、修改或删除任何文件。
+Trae 与 WorkBuddy 的原生目录（`~/.trae-cn`、`%APPDATA%\Trae CN\User\workspaceStorage`、`~/.workbuddy`，含 WorkBuddy 的 `projects/`、`tasks/`）**只读**：`scan` 只做 `os.ReadDir` / `os.ReadFile` / `os.Stat`，不会在其中创建、修改或删除任何文件。
 
 `.agent-memory/` 用 `.git/info/exclude` 而不是 `.gitignore`：只影响本机，不会出现在提交里。
 
@@ -273,8 +273,8 @@ SQLite FTS5 默认分词搜不到中文（实测：「用户偏好」里搜「�
 
 ## 9. 任务卡与交接简报
 
-**任务卡**由规则从会话事件抽取（不调用 LLM）：
-- 目标：首条真实用户消息；后续用户消息追加
+**任务卡**由规则从 Qoder / WorkBuddy 的会话事件抽取（不调用 LLM）：
+- 目标：首条真实用户消息；后续用户消息追加。WorkBuddy 的续聊摘要会还原其中的 `<user_query>`，只有截图的会话用会话标题兜底
 - 改动文件：Edit/Write 类工具调用的文件路径
 - 执行命令：Bash 类调用
 - 未解决报错：错误的工具结果
@@ -441,7 +441,7 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 
 ## 13. 只读边界与安全
 
-**只读**：Qoder 的记忆 md 与会话 jsonl、Trae 的记忆/规则 md 与 workspaceStorage、WorkBuddy 的 `MEMORY.md` 一律只读；没有任何写路径指向 `~/.qoder-cn`、`~/.trae-cn`、`~/.workbuddy`、`~/.config/opencode`、`~/.claude`（`handoff` 还会显式拒绝这些目录）。
+**只读**：Qoder 的记忆 md 与会话 jsonl、Trae 的记忆/规则 md 与 workspaceStorage、WorkBuddy 的 `MEMORY.md`、`projects/` 会话与 `tasks/` 任务清单一律只读；没有任何写路径指向 `~/.qoder-cn`、`~/.trae-cn`、`~/.workbuddy`、`~/.config/opencode`、`~/.claude`（`handoff` 还会显式拒绝这些目录）。
 
 **写点只有**：
 1. 数据目录：`config.toml`、`memory.db`、`token`、`port`
@@ -486,9 +486,9 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 - 检索是字面二元组，跨标点短语会漏（见第 8 节）
 - 纯「删除文件 → 用完全相同内容恢复」若从未观察到读错误，条目会一直 stale（`scan --full` 或 `memory purge` 可处理）
 - `last_seen_at` 语义是「最后变更」而非「最后见到」
-- Trae / WorkBuddy 只有记忆、没有会话：Trae 读 `memory/`、`memory/projects/*/project_memory.md` 与 `user_rules/`，WorkBuddy 只读 `~/.workbuddy/MEMORY.md`；两者不产生任务卡、不接 MCP，靠项目里的 `HANDOFF.md` 读取共享记忆
-- WorkBuddy 不参与文件监听（`~/.workbuddy` 根目录有大量应用缓存，监听会放大事件量），改动由 30 秒轮询兜底；Trae 只监听 `memory/` 与 `user_rules/`，`workspaceStorage` 的变化不触发扫描
-- OpenCode 的会话/记忆与 Trae 的会话（`state.vscdb`，结构未公开）尚未接入
+- Trae 只有记忆、没有本地会话：Trae 读 `memory/`、`memory/projects/*/project_memory.md` 与 `user_rules/`，会话正文在云端，`state.vscdb` 只有界面状态，所以不产生任务卡；WorkBuddy 除 `~/.workbuddy/MEMORY.md` 外，还导入带任务清单的 `projects/*.jsonl` 会话并生成任务卡；两者不接 MCP，靠项目里的 `HANDOFF.md` 读取共享记忆
+- WorkBuddy 不参与文件监听（`~/.workbuddy` 根目录有大量应用缓存，监听会放大事件量），记忆、会话与任务清单的变化由 30 秒轮询兜底；Trae 只监听 `memory/` 与 `user_rules/`，`workspaceStorage` 的变化不触发扫描
+- OpenCode 的会话/记忆与 Trae 的云端会话尚未接入
 - `git worktree` / submodule 的 `.git` 是文件，目前读不到 remote，会退化为路径 key
 - 单机单库；多机同步与全文 transcript 检索属于非目标
 

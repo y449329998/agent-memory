@@ -441,7 +441,16 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	cards, err := s.st.ListTaskCards(r.Context(), projectID, r.URL.Query().Get("status"), 10)
+	limit := 10
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+			if limit > 50 {
+				limit = 50
+			}
+		}
+	}
+	cards, err := s.st.ListTaskCards(r.Context(), projectID, r.URL.Query().Get("status"), limit)
 	if err != nil {
 		httpError(w, err)
 		return

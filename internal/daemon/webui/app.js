@@ -95,9 +95,15 @@
       .replace(/```[\s\S]*?```/g, ' ')
       .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
       .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/\|?[\s:|-]*-{2,}[\s:|-]*\|/g, ' ')
+      .replace(/\|/g, ' ')
       .replace(/[*_`#>]+/g, '')
       .replace(/\s+/g, ' ')
       .trim();
+  }
+  function clipText(text, n) {
+    const chars = Array.from(text);
+    return chars.length > n ? chars.slice(0, n - 1).join('') + '…' : text;
   }
   function countUp(node, to) {
     if (!node) return;
@@ -359,18 +365,19 @@
     const box = $('task-list');
     clear(box);
     try {
-      const d = await api('/v1/task?project_key=' + enc(key) + '&limit=10');
+      const d = await api('/v1/task?project_key=' + enc(key) + '&limit=20');
       const cards = d.cards || [];
       cards.forEach((c) => {
         const card = el('article', 'card');
         const head = el('div', 'card-head');
-        head.appendChild(el('strong', '', c.Goal || '（无目标）'));
+        head.appendChild(el('strong', '', clipText(plainPreview(c.Goal || '（无目标）'), 160)));
         head.appendChild(statusStamp(c.Status));
         card.appendChild(head);
-        if (c.NextSteps) {
+        const next = clipText(plainPreview(c.NextSteps || ''), 260);
+        if (next) {
           const p = el('p', '');
           p.appendChild(el('span', 'meta', '下一步：'));
-          p.appendChild(document.createTextNode(c.NextSteps));
+          p.appendChild(document.createTextNode(next));
           card.appendChild(p);
         }
         card.appendChild(el('div', 'meta', '最近活动：' + fmtTime(c.UpdatedAt)));
@@ -384,7 +391,7 @@
         }
         box.appendChild(card);
       });
-      if (!cards.length) box.appendChild(el('p', 'empty', '还没有任务卡。Qoder 的会话会提炼成任务卡。'));
+      if (!cards.length) box.appendChild(el('p', 'empty', '还没有任务卡。Qoder / WorkBuddy 的会话会在静默后提炼成任务卡；Trae 的会话正文在云端，暂不支持。'));
       $('task-meta').textContent = cards.length ? '共 ' + cards.length + ' 张' : '';
     } catch (e) {
       box.appendChild(el('p', 'empty', '任务卡加载失败：' + e.message));
