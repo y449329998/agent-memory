@@ -71,13 +71,17 @@ func resetWindowRequests() {
 func Run(ctx context.Context, opts Options) error {
 	if err := acquireSingleInstance(); err != nil {
 		if errors.Is(err, errAlready) {
-			focusExistingWindow(appTitle)
-			MessageBox("agent-memory", "agent-memory 已在运行（见系统托盘）。")
+			// 已在运行的实例自己决定是聚焦窗口还是新开；这里通知完就退出。
+			if !signalShowWindow() {
+				focusExistingWindow(appTitle)
+				MessageBox("agent-memory", "agent-memory 已在运行（见系统托盘）。")
+			}
 			return nil
 		}
 		return err
 	}
 	defer releaseSingleInstance()
+	startShowListener()
 
 	cfg, logger, closeLog, err := bootConfig(opts)
 	if err != nil {
@@ -100,7 +104,7 @@ func Run(ctx context.Context, opts Options) error {
 
 	quit := make(chan struct{}, 1)
 	actions := trayActions{
-		OpenWindow: func() { requestWindow() },
+		OpenWindow: showAppWindow,
 		Sync: func() {
 			if err := postJSON(port, token, "/v1/scan"); err != nil {
 				logger.Printf("托盘同步失败：%v", err)
@@ -124,7 +128,8 @@ func Run(ctx context.Context, opts Options) error {
 		},
 	}
 
-	if _, err := startTray(actions, logger); err != nil {
+	_, trayDone, err := startTray(actions, logger)
+	if err != nil {
 		logger.Printf("托盘启动失败，降级为关窗即退出：%v", err)
 		if !opts.TrayOnly {
 			openWindowOnce(link, cfg, logger)
@@ -138,6 +143,9 @@ func Run(ctx context.Context, opts Options) error {
 	for {
 		select {
 		case <-quit:
+			return nil
+		case <-trayDone:
+			// 托盘没了就没有再打开窗口的入口，直接退出，避免留下不可达的进程。
 			return nil
 		case <-takeWindowRequest():
 			openWindowOnce(link, cfg, logger)

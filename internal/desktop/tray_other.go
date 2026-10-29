@@ -16,6 +16,6 @@ type trayActions struct {
 	StopAndQuit func()
 }
 
-func startTray(trayActions, *log.Logger) (<-chan struct{}, error) {
-	return nil, errors.New("当前平台不支持系统托盘")
+func startTray(trayActions, *log.Logger) (<-chan struct{}, <-chan struct{}, error) {
+	return nil, nil, errors.New("当前平台不支持系统托盘")
 }
