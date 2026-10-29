@@ -208,9 +208,34 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
+	ref := r.URL.Query().Get("project_path")
+	if ref == "" {
+		ref = r.URL.Query().Get("project_key")
+	}
+	if ref != "" {
+		id, err := s.projectIDFromRequest(r.Context(), ref, ref)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		rows, total, failed, err := s.st.ListProjectSources(r.Context(), id, limit)
+		if err != nil {
+			httpError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"sources": rows, "count": len(rows), "total": total, "failed": failed,
+		})
+		return
+	}
 	agent := r.URL.Query().Get("agent")
 	failedOnly := r.URL.Query().Get("failed") == "1"
 	total, err := s.st.CountSources(r.Context(), agent, failedOnly)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	failed, err := s.st.CountSources(r.Context(), agent, true)
 	if err != nil {
 		httpError(w, err)
 		return
@@ -220,7 +245,7 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 		httpError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"sources": rows, "count": len(rows), "total": total})
+	writeJSON(w, http.StatusOK, map[string]any{"sources": rows, "count": len(rows), "total": total, "failed": failed})
 }
 
 // handleShutdown 受理托盘「停止服务并退出」：先应答再异步取消服务上下文。
