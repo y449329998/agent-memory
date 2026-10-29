@@ -301,6 +301,7 @@ type ProjectSummary struct {
 	MemoryCount  int
 	StaleCount   int
 	LastMemoryAt time.Time
+	TaskCount    int
 }
 
 func (s *Store) ListProjectSummaries(ctx context.Context) ([]ProjectSummary, error) {
@@ -308,7 +309,8 @@ func (s *Store) ListProjectSummaries(ctx context.Context) ([]ProjectSummary, err
 SELECT p.id, p.key, p.display_name, p.primary_path,
        COUNT(m.id),
        SUM(CASE WHEN m.stale = 1 THEN 1 ELSE 0 END),
-       COALESCE(MAX(m.last_seen_at), 0)
+       COALESCE(MAX(m.last_seen_at), 0),
+       (SELECT COUNT(*) FROM task_card t WHERE t.project_id = p.id)
 FROM project p
 LEFT JOIN memory_item m ON m.project_id = p.id AND m.scope = 'project'
 GROUP BY p.id
@@ -326,7 +328,7 @@ ORDER BY p.key`)
 			stale    sql.NullInt64
 		)
 		if err := rows.Scan(&ps.ID, &ps.Key, &ps.DisplayName, &ps.PrimaryPath,
-			&ps.MemoryCount, &stale, &lastSeen); err != nil {
+			&ps.MemoryCount, &stale, &lastSeen, &ps.TaskCount); err != nil {
 			return nil, err
 		}
 		if stale.Valid {

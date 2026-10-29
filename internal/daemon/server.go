@@ -121,6 +121,7 @@ type projectSummary struct {
 	StaleCount   int    `json:"stale_count"`
 	LastMemoryAt string `json:"last_memory_at"`
 	PathExists   bool   `json:"path_exists"`
+	TaskCount    int    `json:"task_count"`
 }
 
 func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
@@ -138,7 +139,7 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 		out = append(out, projectSummary{
 			ID: p.ID, Key: p.Key, DisplayName: p.DisplayName, PrimaryPath: p.PrimaryPath,
 			MemoryCount: p.MemoryCount, StaleCount: p.StaleCount, LastMemoryAt: last,
-			PathExists: p.PrimaryPath != "" && dirExists(p.PrimaryPath),
+			PathExists: p.PrimaryPath != "" && dirExists(p.PrimaryPath), TaskCount: p.TaskCount,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"projects": out, "count": len(out)})
