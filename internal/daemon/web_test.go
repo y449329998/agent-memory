@@ -66,7 +66,7 @@ func TestIndexPageTokenAuth(t *testing.T) {
 		t.Fatalf("content-type = %q, want text/html", ct)
 	}
 	page := rec.Body.String()
-	if !strings.Contains(page, "搜索记忆") || !strings.Contains(page, "sessionStorage") {
+	if !strings.Contains(page, "用户级记忆") || !strings.Contains(page, "sessionStorage") {
 		t.Fatalf("web ui page missing expected content: %q", page)
 	}
 	if strings.Contains(page, "<script src=") || strings.Contains(page, "<link rel=\"stylesheet\"") {

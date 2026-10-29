@@ -472,7 +472,7 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
         p.push('scope=user');
       }
       if ($(cfg.type).value) p.push('type=' + encodeURIComponent($(cfg.type).value));
-      if ($(cfg.stale).checked) p.push('stale=1');
+      if (!$(cfg.stale).checked) p.push('stale=0');
       return p.join('&');
     }
     function render() {
@@ -660,7 +660,7 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     var writable = p.path_exists !== false && !!p.primary_path;
     $('project-add-toggle').disabled = !writable;
     $('handoff-write').disabled = !writable;
-    api('/v1/memory?scope=user&limit=1').then(function (d) {
+    api('/v1/memory?scope=user&limit=1&stale=0').then(function (d) {
       $('ov-user-mem').textContent = d.total || 0;
     }, function () { $('ov-user-mem').textContent = '—'; });
   }
