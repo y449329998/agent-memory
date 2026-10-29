@@ -624,8 +624,17 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     $('ov-mem').textContent = p.memory_count || 0;
     $('ov-tasks').textContent = p.task_count || 0;
     $('ov-last').textContent = p.last_memory_at ? fmtTime(p.last_memory_at) : '—';
+    $('ov-user-mem').textContent = '…';
+    $('ov-sources').textContent = '—';
+    $('ov-agents').textContent = '—';
     $('ov-warning').hidden = p.path_exists !== false;
-    if (p.path_exists === false) $('ov-warning').textContent = '项目路径不存在：项目级写入与生成简报已禁用。';
+    if (p.path_exists === false) $('ov-warning').textContent = '项目路径不存在：项目级写入与生成简报已禁用，请先移动或重新登记项目。';
+    var writable = p.path_exists !== false && !!p.primary_path;
+    $('project-add-toggle').disabled = !writable;
+    $('handoff-write').disabled = !writable;
+    api('/v1/memory?scope=user&limit=1').then(function (d) {
+      $('ov-user-mem').textContent = d.total || 0;
+    }, function () { $('ov-user-mem').textContent = '—'; });
   }
 
   // Task 11 替换为完整版本
@@ -633,7 +642,7 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     return Promise.all([loadStats().catch(function () {}), loadProjects()]);
   }
   function refreshCurrent() {
-    return state.view === 'project' ? Promise.resolve() : refreshHome();
+    return state.view === 'project' ? refreshProject() : refreshHome();
   }
   function refreshLive() {
     if (document.hidden || state.edit || state.drawer) return Promise.resolve();
@@ -672,8 +681,139 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     $('project-path').textContent = p.primary_path || p.key;
     window.scrollTo(0, 0);
     renderOverview(p);
+    ensureProjectViews();
+    state.projectMem.reload(true);
+    state.projectUser.reload(true);
+    loadProjectTasks();
+    loadProjectHandoff();
+    loadProjectSources();
+    loadProjectSessions();
   }
   window.addEventListener('hashchange', route);
+
+  function ensureProjectViews() {
+    if (state.projectMem) return;
+    fillTypeSelect($('project-mem-type'), true);
+    fillTypeSelect($('project-user-type'), true);
+    state.projectMem = memoryView({
+      scope: 'project', list: 'project-mem-list', total: 'project-mem-total',
+      search: 'project-mem-search', type: 'project-mem-type', stale: 'project-mem-stale', more: 'project-mem-more'
+    });
+    state.projectUser = memoryView({
+      scope: 'user', list: 'project-user-list', total: 'project-user-total',
+      search: 'project-user-search', type: 'project-user-type', stale: 'project-user-stale', more: 'project-user-more'
+    });
+  }
+
+  function loadProjectTasks() {
+    var list = $('task-list'), status = $('task-status');
+    if (!state.project) return Promise.resolve();
+    clear(list);
+    status.textContent = '加载中…';
+    return api('/v1/task?project_key=' + encodeURIComponent(state.project.key) + '&limit=10').then(function (d) {
+      var cards = d.cards || [];
+      clear(list);
+      if (!cards.length) {
+        status.textContent = '这个项目还没有任务卡。';
+        list.appendChild(el('li', 'muted', 'Qoder 的会话会提炼成任务卡；Trae / WorkBuddy 目前只同步记忆。'));
+        return;
+      }
+      status.textContent = '共 ' + cards.length + ' 张';
+      cards.forEach(function (c) { list.appendChild(renderTask(c)); });
+    }, function (e) {
+      status.textContent = '加载失败：' + e.message;
+      throw e;
+    });
+  }
+
+  function loadProjectHandoff() {
+    if (!state.project) {
+      $('handoff-body').textContent = '无';
+      $('handoff-meta').textContent = '';
+      return Promise.resolve();
+    }
+    $('handoff-meta').textContent = '加载中…';
+    return api('/v1/handoff?project_key=' + encodeURIComponent(state.project.key) + '&format=json').then(function (d) {
+      var body = d.body || '';
+      $('handoff-body').textContent = body || '无';
+      $('handoff-meta').textContent = '约 ' + body.length + ' 字' + (d.truncated ? ' · 已按预算精简' : '');
+    }, function (e) {
+      $('handoff-meta').textContent = '加载失败：' + e.message;
+      throw e;
+    });
+  }
+
+  function loadProjectSources() {
+    var list = $('source-list');
+    if (!state.project) return Promise.resolve();
+    clear(list);
+    list.appendChild(el('li', 'muted', '加载中…'));
+    return api('/v1/sources?project_key=' + encodeURIComponent(state.project.key) + '&limit=100').then(function (d) {
+      var rows = d.sources || [];
+      clear(list);
+      var latest = '';
+      var agents = {};
+      rows.forEach(function (r) {
+        if (r.UpdatedAt > latest) latest = r.UpdatedAt;
+        agents[r.Agent] = 1;
+        var li = el('li', 'item');
+        var head = el('div', 'item-head');
+        head.appendChild(el('span', 'badge', r.Agent));
+        head.appendChild(el('span', 'badge', r.Kind === 'session' ? '会话' : '记忆'));
+        if (r.LastError) head.appendChild(el('span', 'badge blocked', '失败'));
+        li.appendChild(head);
+        li.appendChild(el('div', 'mono', r.Path || ''));
+        li.appendChild(el('div', 'item-meta', '最后扫描：' + fmtTime(r.UpdatedAt) + ' · 大小：' + (r.Size || 0) + ' 字节'));
+        if (r.LastError) li.appendChild(el('p', 'item-text', '原因：' + r.LastError));
+        list.appendChild(li);
+      });
+      if (!rows.length) list.appendChild(el('li', 'muted', '还没有给这个项目贡献过记忆的来源文件。'));
+      $('source-summary').textContent = '最后同步：' + (latest ? fmtTime(latest) : '—')
+        + ' · 失败 ' + (d.failed || 0) + ' 个 · 共 ' + (d.total || 0) + ' 个';
+      $('ov-sources').textContent = (d.total || 0) + ' 个（失败 ' + (d.failed || 0) + '）';
+      $('ov-agents').textContent = Object.keys(agents).join(' · ') || '—';
+    }, function (e) {
+      clear(list);
+      list.appendChild(el('li', 'muted', '来源加载失败：' + e.message));
+    });
+  }
+
+  function loadProjectSessions() {
+    var list = $('session-list');
+    if (!state.project) return Promise.resolve();
+    clear(list);
+    return api('/v1/sessions?project_key=' + encodeURIComponent(state.project.key) + '&limit=20').then(function (d) {
+      var rows = d.sessions || [];
+      clear(list);
+      $('session-empty').hidden = rows.length > 0;
+      rows.forEach(function (s) {
+        var li = el('li', 'item');
+        var head = el('div', 'item-head');
+        head.appendChild(el('span', 'badge', s.agent));
+        head.appendChild(el('strong', '', s.title || '（无标题会话）'));
+        li.appendChild(head);
+        li.appendChild(el('div', 'item-meta', '最近活动：' + fmtTime(s.updated_at) + ' · 事件 ' + (s.event_count || 0)));
+        list.appendChild(li);
+      });
+    }, function (e) {
+      clear(list);
+      list.appendChild(el('li', 'muted', '会话加载失败：' + e.message));
+    });
+  }
+
+  function refreshProject() {
+    if (!state.project) return Promise.resolve();
+    var p = findProject(state.project.key);
+    if (p) { state.project = p; renderOverview(p); }
+    return Promise.all([
+      state.projectMem ? state.projectMem.reload(false) : Promise.resolve(),
+      state.projectUser ? state.projectUser.reload(false) : Promise.resolve(),
+      loadProjectTasks().catch(function () {}),
+      loadProjectHandoff().catch(function () {}),
+      loadProjectSources(),
+      loadProjectSessions()
+    ]);
+  }
 
   function syncNow() {
     return api('/v1/scan', { method: 'POST' }).then(function (d) {
@@ -970,6 +1110,25 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     $('edit-backdrop').addEventListener('click', function () { closeEdit(false); });
     $('memory-save').addEventListener('click', saveEdit);
     $('memory-stale').addEventListener('click', toggleEditStale);
+    $('handoff-preview').addEventListener('click', function () {
+      busy(this, '预览', function () {
+        return loadProjectHandoff().then(function () { toast('info', '简报已更新'); });
+      });
+    });
+    $('handoff-write').addEventListener('click', function () {
+      if (!state.project || !state.project.primary_path) { toast('error', '请先选择一个有路径的项目'); return; }
+      busy(this, '生成', function () {
+        return api('/v1/handoff', { method: 'POST', body: JSON.stringify({ project_path: state.project.primary_path, write: true }) })
+          .then(function (d) {
+            $('handoff-body').textContent = d.body || '无';
+            $('handoff-meta').textContent = '约 ' + ((d.body || '').length) + ' 字' + (d.changed ? ' · 已更新' : ' · 内容无变化');
+            toast('info', d.changed ? '已更新项目里的交接简报' : '内容无变化，未重写');
+          });
+      });
+    });
+    $('source-sync').addEventListener('click', function () {
+      busy(this, '同步', syncNow);
+    });
     document.addEventListener('keydown', function (e) {
       if (!state.edit) return;
       if (e.key === 'Escape') closeEdit(false);
