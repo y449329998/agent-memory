@@ -1,0 +1,37 @@
+{{define "content"}}
+<section class="hero rise">
+  <p class="kicker">MEMORY LEDGER · 跨 AGENT 共享</p>
+  <h1 class="display">记忆<span class="accent">档案馆</span></h1>
+  <p class="lede">Qoder、Trae、WorkBuddy 的偏好与结论按项目归档。换一个 agent，不必从头讲。</p>
+</section>
+
+<section class="stats" aria-label="总览数字">
+  <a class="stat" href="#projects"><span id="stat-projects" class="num">0</span><span class="label">项目</span></a>
+  <a class="stat" href="/memories"><span id="stat-memories" class="num">0</span><span class="label">记忆</span></a>
+  <a class="stat" href="/memories?stale=1"><span id="stat-stale" class="num">0</span><span class="label">过时</span></a>
+  <a class="stat" href="/sources"><span id="stat-sources" class="num">0</span><span class="label">来源</span></a>
+  <a class="stat" href="/sources?failed=1"><span id="stat-failed" class="num">0</span><span class="label">失败源</span></a>
+</section>
+
+<section id="projects" class="section rise" style="--delay:80ms">
+  <div class="section-head"><span class="no">01</span><h2>项目索引</h2><span id="project-count" class="meta"></span></div>
+  <div id="project-index" class="index"></div>
+  <p id="project-empty" class="empty" hidden>还没有项目。点「立即同步」开始归档。</p>
+</section>
+
+<section class="section rise" style="--delay:140ms">
+  <div class="section-head"><span class="no">02</span><h2>用户级记忆</h2><span id="home-mem-meta" class="meta"></span><a class="more" href="/memories?scope=user">查看全部 <span aria-hidden="true">→</span></a></div>
+  <p class="hint">对所有项目生效。</p>
+  <ul id="home-memories" class="entries"></ul>
+  <details class="add-sheet">
+    <summary>新增一条用户级记忆</summary>
+    <form id="home-add" class="stack">
+      <label class="field"><span class="label">正文</span><textarea id="home-add-text" rows="4" placeholder="一条可复用的偏好、约束或事实…" required></textarea></label>
+      <div class="row">
+        <label class="field inline"><span class="label">类型</span><select id="home-add-type"></select></label>
+        <button class="stamp primary" type="submit">保存</button>
+      </div>
+    </form>
+  </details>
+</section>
+{{end}}

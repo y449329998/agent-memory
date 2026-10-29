@@ -1,8 +1,6 @@
 package daemon
 
 import (
-	"crypto/subtle"
-	_ "embed"
 	"fmt"
 	"net"
 	"net/http"
@@ -16,24 +14,6 @@ import (
 	"github.com/muyi99/agent-memory/internal/store"
 	"github.com/muyi99/agent-memory/internal/surface"
 )
-
-//go:embed index.html
-var indexHTML []byte
-
-// handleIndex 返回内嵌单页。token 只从 ?token= 或 Authorization 取，
-// 页面本身不带 Bearer 也能加载；前端拿到后用它调 /v1/*。
-func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	token := r.URL.Query().Get("token")
-	if token == "" {
-		token = bearerToken(r)
-	}
-	if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.Token)) != 1 {
-		http.Error(w, "unauthorized: 浏览器打开 /?token=<token>", http.StatusUnauthorized)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(indexHTML)
-}
 
 // writeAuth 是写接口的守卫：先校验 Bearer，再校验 Origin。
 // 不设任何 CORS 响应头；浏览器跨站写请求一定带 Origin，非本机回环来源一律拒绝。

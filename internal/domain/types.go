@@ -93,6 +93,7 @@ type Project struct {
 type SearchQuery struct {
 	Text         string
 	ProjectID    int64
+	AllProjects  bool
 	Scope        Scope
 	Type         MemoryType
 	IncludeStale bool

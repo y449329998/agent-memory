@@ -41,45 +41,29 @@ func webDo(t *testing.T, s *Server, method, target, token string, body any, muta
 	return rec
 }
 
-func TestIndexPageTokenAuth(t *testing.T) {
+func TestPageShellIsPublicButAPIsAreNot(t *testing.T) {
 	s, _ := newTestServer(t)
 
+	// 页面壳不含数据也不含令牌，可以公开；令牌由前端读取后调受保护的 /v1/*。
 	rec := webDo(t, s, http.MethodGet, "/", "", nil, nil)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("no token: code = %d, want 401", rec.Code)
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, "浏览器打开") || !strings.Contains(body, "/?token=") {
-		t.Fatalf("401 body should tell the user how to open the page: %q", body)
-	}
-
-	rec = webDo(t, s, http.MethodGet, "/?token=wrong", "", nil, nil)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("wrong token: code = %d, want 401", rec.Code)
-	}
-
-	rec = webDo(t, s, http.MethodGet, "/?token="+webToken, "", nil, nil)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("query token: code = %d body = %s", rec.Code, rec.Body.String())
+		t.Fatalf("page shell: code = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `id="token-gate"`) {
+		t.Fatalf("page shell should contain the client-side token gate")
 	}
 	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
 		t.Fatalf("content-type = %q, want text/html", ct)
 	}
-	page := rec.Body.String()
-	if !strings.Contains(page, "用户级记忆") || !strings.Contains(page, "sessionStorage") {
-		t.Fatalf("web ui page missing expected content: %q", page)
-	}
-	if strings.Contains(page, "<script src=") || strings.Contains(page, "<link rel=\"stylesheet\"") {
-		t.Fatal("web ui must be a single self-contained page without external assets")
-	}
-	// 记忆正文来自外部文件，动态内容只能走 textContent；页面里不应出现 HTML 注入入口。
-	if strings.Contains(page, "innerHTML") || strings.Contains(page, "insertAdjacentHTML") {
-		t.Fatal("web ui must not use innerHTML/insertAdjacentHTML for dynamic content")
+
+	rec = webDo(t, s, http.MethodGet, "/?token="+webToken, "", nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("query token shell: code = %d, want 200", rec.Code)
 	}
 
-	rec = webDo(t, s, http.MethodGet, "/", webToken, nil, nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("bearer token: code = %d, want 200", rec.Code)
+	rec = webDo(t, s, http.MethodGet, "/v1/projects", "", nil, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("api without token: code = %d, want 401", rec.Code)
 	}
 }
 

@@ -235,3 +235,42 @@ func TestFTS_ProjectSearchAlsoReturnsUserScope(t *testing.T) {
 		t.Fatal("other project's item leaked")
 	}
 }
+
+func TestFTS_AllProjectsSearchesEveryScope(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0)
+	for i, d := range []domain.MemoryDraft{
+		{Scope: domain.ScopeUser, Type: domain.TypePreference, Text: "全局的中文偏好", SourceAgent: "qoder", SourcePath: "/u.md"},
+		{Scope: domain.ScopeProject, Type: domain.TypeFact, Text: "甲项目的中文说明", SourceAgent: "trae", SourcePath: "/a.md"},
+		{Scope: domain.ScopeProject, Type: domain.TypeFact, Text: "乙项目的中文说明", SourceAgent: "trae", SourcePath: "/b.md"},
+	} {
+		pid := int64(0)
+		if i > 0 {
+			pid = int64(i * 3)
+		}
+		if _, _, err := s.UpsertMemory(ctx, pid, d, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	hits, err := (FTS{store: s}).Search(ctx, domain.SearchQuery{Text: "中文", AllProjects: true, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 3 {
+		t.Fatalf("all-projects hits = %d, want 3", len(hits))
+	}
+	hits, err = (FTS{store: s}).Search(ctx, domain.SearchQuery{Text: "中文", AllProjects: true, Scope: domain.ScopeProject, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 2 {
+		t.Fatalf("all-projects project-scope hits = %d, want 2", len(hits))
+	}
+	for _, h := range hits {
+		if h.Memory.Scope != domain.ScopeProject {
+			t.Fatalf("scope leaked: %+v", h.Memory)
+		}
+	}
+}

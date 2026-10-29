@@ -1,0 +1,22 @@
+{{define "content"}}
+<nav class="crumbs" aria-label="面包屑"><a href="/">总览</a><span class="sep">/</span><a id="back-link" href="/memories">记忆档案</a><span class="sep">/</span><span>编辑</span></nav>
+
+<article class="sheet rise">
+  <p class="kicker">EDIT MEMORY <span id="memory-id" class="mono"></span></p>
+  <h1 class="display-sm">修一条记忆</h1>
+  <form id="edit-form" class="stack">
+    <label class="field"><span class="label">正文</span><textarea id="edit-text" rows="10" required></textarea></label>
+    <div class="row">
+      <label class="field inline"><span class="label">类型</span><select id="edit-type"></select></label>
+      <span id="edit-scope" class="stamp tiny"></span>
+    </div>
+    <p id="edit-meta" class="meta"></p>
+    <p id="edit-warning" class="notice" hidden></p>
+    <div class="actions">
+      <button class="stamp primary" type="submit">保存</button>
+      <a id="edit-cancel" class="stamp ghost" href="/memories">取消</a>
+      <button id="edit-stale" class="stamp ghost danger" type="button">不再使用</button>
+    </div>
+  </form>
+</article>
+{{end}}

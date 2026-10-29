@@ -1,0 +1,76 @@
+{{define "content"}}
+<nav class="crumbs" aria-label="面包屑"><a href="/">总览</a><span class="sep">/</span><span id="crumb">项目档案</span></nav>
+
+<div class="dossier">
+  <aside class="rail rise">
+    <p class="kicker">PROJECT DOSSIER</p>
+    <h1 id="project-title" class="display-sm" style="view-transition-name:project-title"></h1>
+    <p id="project-path" class="mono path"></p>
+    <dl id="rail-stats" class="rail-stats"></dl>
+    <nav class="rail-nav" aria-label="页内导航">
+      <a href="#overview"><span>01</span>概况</a>
+      <a href="#memories"><span>02</span>项目记忆</a>
+      <a href="#user"><span>03</span>用户记忆</a>
+      <a href="#tasks"><span>04</span>任务卡</a>
+      <a href="#handoff"><span>05</span>交接简报</a>
+      <a href="#sources"><span>06</span>来源</a>
+      <a href="#sessions"><span>07</span>会话</a>
+    </nav>
+    <p id="project-warning" class="notice" hidden></p>
+  </aside>
+
+  <div class="content">
+    <section id="overview" class="section">
+      <div class="section-head"><span class="no">01</span><h2>概况</h2></div>
+      <div id="overview-grid" class="overview"></div>
+    </section>
+
+    <section id="memories" class="section">
+      <div class="section-head"><span class="no">02</span><h2>项目记忆</h2><span id="project-mem-meta" class="meta"></span><a id="all-memories" class="more" href="/memories">查看全部 <span aria-hidden="true">→</span></a></div>
+      <ul id="project-memories" class="entries"></ul>
+      <details id="project-add-box" class="add-sheet">
+        <summary>新增项目记忆</summary>
+        <form id="project-add" class="stack">
+          <label class="field"><span class="label">正文</span><textarea id="project-add-text" rows="4" placeholder="一条只属于这个项目的约束、约定或事实…" required></textarea></label>
+          <div class="row">
+            <label class="field inline"><span class="label">类型</span><select id="project-add-type"></select></label>
+            <button class="stamp primary" type="submit">保存</button>
+          </div>
+        </form>
+      </details>
+    </section>
+
+    <section id="user" class="section">
+      <div class="section-head"><span class="no">03</span><h2>用户级记忆</h2><span id="project-user-meta" class="meta"></span><a class="more" href="/memories?scope=user">查看全部 <span aria-hidden="true">→</span></a></div>
+      <p class="hint">对所有项目生效。</p>
+      <ul id="project-user-memories" class="entries"></ul>
+    </section>
+
+    <section id="tasks" class="section">
+      <div class="section-head"><span class="no">04</span><h2>任务卡</h2><span id="task-meta" class="meta"></span></div>
+      <div id="task-list" class="cards"></div>
+    </section>
+
+    <section id="handoff" class="section">
+      <div class="section-head"><span class="no">05</span><h2>交接简报</h2></div>
+      <div class="row">
+        <button id="handoff-preview" class="stamp ghost" type="button">预览</button>
+        <button id="handoff-write" class="stamp small" type="button">生成交接简报</button>
+        <span id="handoff-meta" class="meta"></span>
+      </div>
+      <pre id="handoff-body" class="letter">无</pre>
+    </section>
+
+    <section id="sources" class="section">
+      <div class="section-head"><span class="no">06</span><h2>来源</h2><span id="source-meta" class="meta"></span><a class="more" href="/sources">全部来源 <span aria-hidden="true">→</span></a></div>
+      <ul id="source-list" class="sources"></ul>
+    </section>
+
+    <section id="sessions" class="section">
+      <div class="section-head"><span class="no">07</span><h2>最近会话</h2></div>
+      <ol id="session-list" class="timeline"></ol>
+      <p id="session-empty" class="empty" hidden>目前只有 Qoder 会话会被归档；Trae / WorkBuddy 没有本地会话正文。</p>
+    </section>
+  </div>
+</div>
+{{end}}

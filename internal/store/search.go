@@ -46,6 +46,12 @@ func (f FTS) Search(ctx context.Context, q domain.SearchQuery) ([]domain.Hit, er
 	where := []string{"memory_fts MATCH ?"}
 	args := []any{expr}
 	switch {
+	case q.AllProjects:
+		// 跨项目检索：不按项目过滤；显式给了 scope 时再按范围收窄。
+		if q.Scope != "" {
+			where = append(where, `m.scope = ?`)
+			args = append(args, string(q.Scope))
+		}
 	case q.ProjectID > 0:
 		where = append(where, `(m.project_id = ? OR m.scope = ?)`)
 		args = append(args, q.ProjectID, string(domain.ScopeUser))

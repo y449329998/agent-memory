@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>{{.Title}} · agent-memory</title>
+<link rel="stylesheet" href="/assets/app.css">
+<script src="/assets/app.js" defer></script>
+</head>
+<body data-view="{{.View}}"{{if .Key}} data-key="{{.Key}}"{{end}}{{if .MemoryID}} data-memory-id="{{.MemoryID}}"{{end}}>
+<div class="grain" aria-hidden="true"></div>
+<a class="skip" href="#main">跳到正文</a>
+
+<header class="masthead">
+  <a class="wordmark" href="/"><span class="mark">AM</span><span class="word">agent-memory</span></a>
+  <nav class="nav" aria-label="主导航">
+    <a href="/"{{if eq .View "home"}} aria-current="page"{{end}}>总览</a>
+    <a href="/memories"{{if eq .View "memories"}} aria-current="page"{{end}}>记忆档案</a>
+    <a href="/sources"{{if eq .View "sources"}} aria-current="page"{{end}}>来源</a>
+  </nav>
+  <div class="mast-right">
+    <span class="health"><span id="health-dot" class="dot"></span><span id="health-text">检查中</span></span>
+    <button id="sync-btn" class="stamp small" type="button">立即同步</button>
+  </div>
+</header>
+
+<main id="main" class="page">{{template "content" .}}</main>
+
+<section id="token-gate" class="gate" hidden>
+  <p class="kicker">ACCESS</p>
+  <h1 class="display-sm">需要访问令牌</h1>
+  <p class="lede">用带令牌的地址打开本页一次，之后同一标签页里的页面跳转不再重复输入。</p>
+  <p class="mono gate-url">/?token=&lt;~/.agent-memory/token 的内容&gt;</p>
+</section>
+
+<footer class="colophon">
+  <span>agent-memory · 本地共享记忆</span>
+  <span>数据只在这台机器上</span>
+</footer>
+<div id="toasts" class="toasts" aria-live="polite"></div>
+</body>
+</html>

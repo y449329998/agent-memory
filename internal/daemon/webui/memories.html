@@ -1,0 +1,23 @@
+{{define "content"}}
+<header class="page-head rise">
+  <p class="kicker">MEMORY ARCHIVE</p>
+  <h1 class="display-sm">记忆档案</h1>
+  <p id="memories-summary" class="lede">按项目、范围、类型翻查所有条目。</p>
+</header>
+
+<form id="filters" class="filters" method="get" action="/memories">
+  <label class="field inline"><span class="label">关键词</span><input id="filter-q" type="search" name="q" placeholder="例如 部署、约束" autocomplete="off"></label>
+  <label class="field inline"><span class="label">范围</span><select id="filter-scope" name="scope">
+    <option value="">全部范围</option>
+    <option value="user">用户级</option>
+    <option value="project">项目级</option>
+  </select></label>
+  <label class="field inline"><span class="label">项目</span><select id="filter-project" name="project"></select></label>
+  <label class="field inline"><span class="label">类型</span><select id="filter-type" name="type"></select></label>
+  <label class="check"><input id="filter-stale" type="checkbox" name="stale" value="1"> 包含过时</label>
+  <button class="stamp primary" type="submit">筛选</button>
+</form>
+
+<ul id="memory-list" class="entries"></ul>
+<div class="row center"><button id="more" class="stamp ghost" type="button" hidden>展开更多</button></div>
+{{end}}

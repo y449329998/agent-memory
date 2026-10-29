@@ -48,7 +48,12 @@ type Server struct {
 
 func New(cfg Config, st *store.Store) *Server {
 	s := &Server{cfg: cfg, st: st, mux: http.NewServeMux()}
-	s.mux.HandleFunc("GET /{$}", s.handleIndex)
+	s.mux.HandleFunc("GET /{$}", s.handleHomePage)
+	s.mux.HandleFunc("GET /p/{key...}", s.handleProjectPage)
+	s.mux.HandleFunc("GET /m/{id}", s.handleEditPage)
+	s.mux.HandleFunc("GET /memories", s.handleMemoriesPage)
+	s.mux.HandleFunc("GET /sources", s.handleSourcesPage)
+	s.mux.HandleFunc("GET /assets/{file}", s.handleAsset)
 	s.mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /v1/stats", s.auth(s.handleStats))
 	s.mux.HandleFunc("GET /v1/projects", s.auth(s.handleListProjects))
@@ -57,6 +62,7 @@ func New(cfg Config, st *store.Store) *Server {
 	s.mux.HandleFunc("POST /v1/search", s.auth(s.handleSearch))
 	s.mux.HandleFunc("POST /v1/memory", s.auth(s.handleAddMemory))
 	s.mux.HandleFunc("GET /v1/memory", s.auth(s.handleListMemory))
+	s.mux.HandleFunc("GET /v1/memory/item", s.auth(s.handleGetMemory))
 	s.mux.HandleFunc("GET /v1/handoff", s.auth(s.handleHandoff))
 	s.mux.HandleFunc("GET /v1/task", s.auth(s.handleListTasks))
 	s.mux.HandleFunc("POST /v1/project/resolve", s.auth(s.handleResolveProject))
@@ -153,6 +159,7 @@ type searchRequest struct {
 	ProjectKey   string `json:"project_key"`
 	Type         string `json:"type"`
 	Scope        string `json:"scope"`
+	All          bool   `json:"all"`
 	IncludeStale bool   `json:"include_stale"`
 	Limit        int    `json:"limit"`
 }
@@ -175,6 +182,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	hits, err := store.NewFTS(s.st).Search(r.Context(), domain.SearchQuery{
 		Text:         req.Query,
 		ProjectID:    projectID,
+		AllProjects:  req.All,
 		Type:         domain.MemoryType(req.Type),
 		Scope:        domain.Scope(req.Scope),
 		IncludeStale: req.IncludeStale,
@@ -321,6 +329,24 @@ func (s *Server) handleUpdateMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": req.ID, "merged_into": merged})
+}
+
+func (s *Server) handleGetMemory(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "id is required", http.StatusBadRequest)
+		return
+	}
+	m, err := s.st.MemoryByID(r.Context(), id)
+	if errors.Is(err, domain.ErrMemoryNotFound) {
+		http.Error(w, "memory not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, m)
 }
 
 func (s *Server) handleListMemory(w http.ResponseWriter, r *http.Request) {

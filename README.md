@@ -51,7 +51,7 @@ Trae 与 WorkBuddy 的 MCP 配置格式未确证，`link` 拒绝写入；它们�
 
 ## Web UI
 
-`serve` 自带一个本地单页，不需要额外安装：
+`serve` 自带本地 Web UI（多页面：总览、项目档案、记忆档案、来源与编辑页），不需要额外安装：
 
 ```
 http://127.0.0.1:<端口>/?token=<~/.agent-memory/token 里的值>
