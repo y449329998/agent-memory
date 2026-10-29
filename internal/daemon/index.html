@@ -462,7 +462,7 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     return li;
   }
   function memoryView(cfg) {
-    var st = { items: [], total: 0, offset: 0, query: '', loading: false };
+    var st = { items: [], total: 0, offset: 0, query: '', loading: false, gen: 0, pending: false };
     function projectKey() { return state.project ? state.project.key : ''; }
     function params() {
       var p = ['limit=50', 'offset=' + st.offset];
@@ -489,38 +489,52 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
       $(cfg.more).hidden = st.query !== '' || st.items.length >= st.total;
     }
     function load() {
-      if (st.loading) return Promise.resolve();
+      if (st.loading) { st.gen++; st.pending = true; return Promise.resolve(); }
       st.loading = true;
+      var my = ++st.gen;
+      var offset = st.offset;
+      var query = st.query;
       if (!st.items.length) {
         clear($(cfg.list));
         $(cfg.list).appendChild(el('li', 'muted', '加载中…'));
       }
+      function apply(items, total) {
+        if (my !== st.gen) return;
+        st.items = offset === 0 ? items : st.items.concat(items);
+        st.total = total === null ? st.items.length : total;
+        render();
+      }
       var req;
-      if (st.query) {
+      if (query) {
         req = api('/v1/search', { method: 'POST', body: JSON.stringify({
-          query: st.query, scope: cfg.scope,
+          query: query, scope: cfg.scope,
           project_key: cfg.scope === 'project' ? projectKey() : '',
           type: $(cfg.type).value, include_stale: $(cfg.stale).checked, limit: 50
         }) }).then(function (d) {
-          var items = (d.hits || []).map(normalizeHit);
-          st.items = items; st.total = items.length; render();
+          apply((d.hits || []).map(normalizeHit), null);
         });
       } else {
         req = api('/v1/memory?' + params()).then(function (d) {
-          var items = d.memories || [];
-          st.items = st.offset === 0 ? items : st.items.concat(items);
-          st.total = typeof d.total === 'number' ? d.total : st.items.length;
-          render();
+          apply(d.memories || [], typeof d.total === 'number' ? d.total : null);
         });
       }
       return req.catch(function (e) {
+        if (my !== st.gen) return;
         clear($(cfg.list));
         $(cfg.list).appendChild(el('li', 'muted', '加载失败：' + e.message));
-        throw e;
-      }).then(function () { st.loading = false; }, function (e) { st.loading = false; throw e; });
+      }).then(function () {
+        st.loading = false;
+        if (st.pending) { st.pending = false; return load(); }
+      });
     }
-    function reload(reset) {
-      if (reset !== false) st.offset = 0;
+    function reload(resetOffset) {
+      if (resetOffset !== false) st.offset = 0;
+      return load();
+    }
+    function reset() {
+      st.query = '';
+      $(cfg.search).value = '';
+      st.offset = 0;
       return load();
     }
     var timer = null;
@@ -531,7 +545,7 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     $(cfg.type).addEventListener('change', function () { reload(true); });
     $(cfg.stale).addEventListener('change', function () { reload(true); });
     $(cfg.more).addEventListener('click', function () { st.offset += 50; load(); });
-    return { reload: reload };
+    return { reload: reload, reset: reset };
   }
 
   function openEdit(m) {
@@ -546,7 +560,7 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     }
     parts.push('最后变更：' + fmtTime(m.LastSeenAt));
     $('memory-meta').textContent = parts.join('\n');
-    var imported = m.Sources && m.Sources.length;
+    var imported = (m.Sources || []).some(function (s) { return s.Path && s.Path !== 'mcp'; });
     $('memory-warning').hidden = !imported;
     $('memory-warning').textContent = imported ? '这条记忆来自 agent 文件，源文件变化后编辑可能被覆盖。' : '';
     $('memory-stale').textContent = m.Stale ? '恢复使用' : '不再使用';
@@ -661,8 +675,12 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     $('project-add-toggle').disabled = !writable;
     $('handoff-write').disabled = !writable;
     api('/v1/memory?scope=user&limit=1&stale=0').then(function (d) {
+      if (state.project !== p) return;
       $('ov-user-mem').textContent = d.total || 0;
-    }, function () { $('ov-user-mem').textContent = '—'; });
+    }, function () {
+      if (state.project !== p) return;
+      $('ov-user-mem').textContent = '—';
+    });
   }
 
   // Task 11 替换为完整版本
@@ -681,7 +699,7 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     if (document.hidden || state.edit || state.drawer) return Promise.resolve();
     var active = document.activeElement;
     if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) return Promise.resolve();
-    return refreshCurrent();
+    return refreshCurrent().catch(function () {});
   }
 
   function route() {
@@ -691,7 +709,7 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     var key = decodeURIComponent(m[1]);
     var p = findProject(key);
     if (!p) {
-      if (!state.projects.length) { loadProjects().then(route); return; }
+      if (!state.projects.length) { loadProjects().then(route).catch(function () {}); return; }
       toast('error', '项目不存在或已移除');
       location.hash = '#/';
       return;
@@ -706,6 +724,7 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     refreshHome();
   }
   function showProject(p) {
+    var changed = !state.project || state.project.key !== p.key;
     state.view = 'project';
     state.project = p;
     $('home-view').hidden = true;
@@ -714,12 +733,20 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     $('project-path').textContent = p.primary_path || p.key;
     window.scrollTo(0, 0);
     renderOverview(p);
-    $('project-add-form').hidden = true;
     ensureProjectViews();
-    state.projectMem.reload(true);
+    $('project-add-form').hidden = true;
+    $('project-add-text').value = '';
+    if (changed) {
+      $('project-mem-search').value = '';
+      $('project-mem-type').value = '';
+      $('project-mem-stale').checked = false;
+      state.projectMem.reset();
+    } else {
+      state.projectMem.reload(true);
+    }
     state.projectUser.reload(true);
-    loadProjectTasks();
-    loadProjectHandoff();
+    loadProjectTasks().catch(function () {});
+    loadProjectHandoff().catch(function () {});
     loadProjectSources();
     loadProjectSessions();
   }
@@ -742,9 +769,11 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
   function loadProjectTasks() {
     var list = $('task-list'), status = $('task-status');
     if (!state.project) return Promise.resolve();
+    var key = state.project.key;
     clear(list);
     status.textContent = '加载中…';
-    return api('/v1/task?project_key=' + encodeURIComponent(state.project.key) + '&limit=10').then(function (d) {
+    return api('/v1/task?project_key=' + encodeURIComponent(key) + '&limit=10').then(function (d) {
+      if (!state.project || state.project.key !== key) return;
       var cards = d.cards || [];
       clear(list);
       if (!cards.length) {
@@ -755,8 +784,8 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
       status.textContent = '共 ' + cards.length + ' 张';
       cards.forEach(function (c) { list.appendChild(renderTask(c)); });
     }, function (e) {
+      if (!state.project || state.project.key !== key) return;
       status.textContent = '加载失败：' + e.message;
-      throw e;
     });
   }
 
@@ -766,23 +795,27 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
       $('handoff-meta').textContent = '';
       return Promise.resolve();
     }
+    var key = state.project.key;
     $('handoff-meta').textContent = '加载中…';
-    return api('/v1/handoff?project_key=' + encodeURIComponent(state.project.key) + '&format=json').then(function (d) {
+    return api('/v1/handoff?project_key=' + encodeURIComponent(key) + '&format=json').then(function (d) {
+      if (!state.project || state.project.key !== key) return;
       var body = d.body || '';
       $('handoff-body').textContent = body || '无';
       $('handoff-meta').textContent = '约 ' + body.length + ' 字' + (d.truncated ? ' · 已按预算精简' : '');
     }, function (e) {
+      if (!state.project || state.project.key !== key) return;
       $('handoff-meta').textContent = '加载失败：' + e.message;
-      throw e;
     });
   }
 
   function loadProjectSources() {
     var list = $('source-list');
     if (!state.project) return Promise.resolve();
+    var key = state.project.key;
     clear(list);
     list.appendChild(el('li', 'muted', '加载中…'));
-    return api('/v1/sources?project_key=' + encodeURIComponent(state.project.key) + '&limit=100').then(function (d) {
+    return api('/v1/sources?project_key=' + encodeURIComponent(key) + '&limit=100').then(function (d) {
+      if (!state.project || state.project.key !== key) return;
       var rows = d.sources || [];
       clear(list);
       var latest = '';
@@ -807,6 +840,7 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
       $('ov-sources').textContent = (d.total || 0) + ' 个（失败 ' + (d.failed || 0) + '）';
       $('ov-agents').textContent = Object.keys(agents).join(' · ') || '—';
     }, function (e) {
+      if (!state.project || state.project.key !== key) return;
       clear(list);
       list.appendChild(el('li', 'muted', '来源加载失败：' + e.message));
     });
@@ -815,8 +849,10 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
   function loadProjectSessions() {
     var list = $('session-list');
     if (!state.project) return Promise.resolve();
+    var key = state.project.key;
     clear(list);
-    return api('/v1/sessions?project_key=' + encodeURIComponent(state.project.key) + '&limit=20').then(function (d) {
+    return api('/v1/sessions?project_key=' + encodeURIComponent(key) + '&limit=20').then(function (d) {
+      if (!state.project || state.project.key !== key) return;
       var rows = d.sessions || [];
       clear(list);
       $('session-empty').hidden = rows.length > 0;
@@ -830,6 +866,7 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
         list.appendChild(li);
       });
     }, function (e) {
+      if (!state.project || state.project.key !== key) return;
       clear(list);
       list.appendChild(el('li', 'muted', '会话加载失败：' + e.message));
     });
@@ -941,6 +978,7 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     var body = $('drawer-body');
     return api('/v1/projects').then(function (d) {
       state.projects = d.projects || state.projects;
+      renderProjectCards();
       clear(body);
       var ul = el('ul', 'list');
       state.projects.forEach(function (p) {
@@ -1123,6 +1161,8 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
   function bindAddForms() {
     fillTypeSelect($('home-add-type'), false);
     fillTypeSelect($('project-add-type'), false);
+    $('home-add-type').value = 'fact';
+    $('project-add-type').value = 'fact';
     $('home-add-form').addEventListener('submit', function (e) {
       e.preventDefault();
       var btn = this.querySelector('button');
@@ -1232,7 +1272,7 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
       search: 'home-user-search', type: 'home-user-type', stale: 'home-user-stale', more: 'home-user-more'
     });
     state.userHome.reload(true).catch(function (e) { toast('error', '读取用户级记忆失败：' + e.message); });
-    loadProjects().then(route);
+    loadProjects().then(route).catch(function (e) { toast('error', '读取项目失败：' + e.message); });
     window.addEventListener('focus', function () { refreshLive(); });
     setInterval(function () { refreshLive(); }, 30000);
   }
