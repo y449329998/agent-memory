@@ -93,6 +93,9 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
   border-left:1px solid var(--line);box-shadow:var(--shadow);transform:translateX(8px);opacity:0;
   transition:transform .2s cubic-bezier(.2,0,0,1),opacity .2s;display:flex;flex-direction:column;z-index:40}
 .drawer.open{transform:none;opacity:1}
+/* display:flex 会压过 UA 的 [hidden]{display:none}；不显式声明的话关闭的抽屉仍在位，透明但挡住点击 */
+.drawer[hidden],.backdrop[hidden]{display:none}
+.drawer:not(.open),.backdrop:not(.open){pointer-events:none}
 .drawer header{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid var(--line)}
 .drawer header h2{font-size:15px;margin:0}
 .drawer .filters{display:flex;gap:8px;flex-wrap:wrap;padding:12px 18px;border-bottom:1px solid var(--line)}
