@@ -202,7 +202,7 @@ a { color: inherit; }
 .theme-toggle:hover { color: var(--text); background: var(--surface-2); border-color: var(--stroke-strong); }
 
 /* ---------- layout ---------- */
-.page { max-width: 1200px; margin: 0 auto; padding: 40px 34px 100px; }
+.page { max-width: 1200px; margin: 0 auto; padding: 20px 34px 96px; }
 .colophon {
   max-width: 1200px;
   margin: 0 auto;
@@ -266,7 +266,7 @@ a { color: inherit; }
 .accent-line { color: var(--accent); }
 
 /* ---------- hero ---------- */
-.hero { position: relative; padding: 78px 0 44px; }
+.hero { position: relative; padding: 26px 0 38px; }
 .hero .lede { margin-top: 6px; }
 .hero::after {
   content: "";
@@ -734,8 +734,8 @@ html[data-theme="light"] .sheet textarea { background: rgba(255, 255, 255, 0.65)
   .masthead { padding: 12px 18px; gap: 14px; flex-wrap: wrap; }
   .nav { order: 3; width: 100%; margin-right: 0; gap: 2px; }
   .mast-right { margin-left: auto; }
-  .page { padding: 28px 18px 80px; }
-  .hero { padding: 48px 0 30px; }
+  .page { padding: 16px 18px 72px; }
+  .hero { padding: 20px 0 28px; }
   .hero::after { display: none; }
   .dossier { grid-template-columns: 1fr; gap: 18px; }
   .rail { position: static; }
