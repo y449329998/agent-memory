@@ -614,7 +614,35 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
   function loadProjects() {
     return api('/v1/projects').then(function (data) {
       state.projects = (data.projects || []).filter(function (p) { return p && p.key; });
+      renderProjectCards();
     });
+  }
+  function renderProjectCards() {
+    var grid = $('project-grid');
+    clear(grid);
+    var list = state.projects.slice().sort(function (a, b) {
+      if (!!b.path_exists !== !!a.path_exists) return a.path_exists ? -1 : 1;
+      var ta = a.last_memory_at || '', tb = b.last_memory_at || '';
+      if (ta !== tb) return tb.localeCompare(ta);
+      return projectLabel(a).localeCompare(projectLabel(b));
+    });
+    list.forEach(function (p) {
+      var card = el('button', 'project-card' + (p.path_exists === false ? ' bad' : ''));
+      card.type = 'button';
+      card.appendChild(el('span', 'name', projectLabel(p)));
+      card.appendChild(el('span', 'path mono', p.primary_path || p.key));
+      var meta = el('div', 'meta');
+      meta.appendChild(el('span', '', '记忆 ' + (p.memory_count || 0)));
+      meta.appendChild(el('span', '', p.task_count ? '任务卡 ' + p.task_count : '仅记忆'));
+      meta.appendChild(el('span', '', p.path_exists === false ? '路径不存在' : '最后活动 ' + (p.last_memory_at ? fmtTime(p.last_memory_at) : '—')));
+      card.appendChild(meta);
+      card.addEventListener('click', function () {
+        location.hash = '#/p/' + encodeURIComponent(p.key);
+      });
+      grid.appendChild(card);
+    });
+    $('project-count').textContent = list.length ? '共 ' + list.length + ' 个' : '';
+    $('project-empty').hidden = list.length > 0;
   }
 
   function loadStats() { return api('/v1/stats').then(setStats); }
@@ -639,7 +667,12 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
 
   // Task 11 替换为完整版本
   function refreshHome() {
-    return Promise.all([loadStats().catch(function () {}), loadProjects()]);
+    return Promise.all([
+      loadStats().catch(function (e) { toast('error', '刷新统计失败：' + e.message); }),
+      loadProjects().catch(function (e) { toast('error', '刷新项目失败：' + e.message); })
+    ]).then(function () {
+      if (state.userHome) return state.userHome.reload(false);
+    });
   }
   function refreshCurrent() {
     return state.view === 'project' ? refreshProject() : refreshHome();
@@ -681,6 +714,7 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     $('project-path').textContent = p.primary_path || p.key;
     window.scrollTo(0, 0);
     renderOverview(p);
+    $('project-add-form').hidden = true;
     ensureProjectViews();
     state.projectMem.reload(true);
     state.projectUser.reload(true);
@@ -1086,6 +1120,48 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     });
   }
 
+  function bindAddForms() {
+    fillTypeSelect($('home-add-type'), false);
+    fillTypeSelect($('project-add-type'), false);
+    $('home-add-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var btn = this.querySelector('button');
+      busy(btn, '保存', function () {
+        var text = $('home-add-text').value.trim();
+        if (!text) { toast('error', '请输入记忆内容'); return Promise.resolve(); }
+        return api('/v1/memory', { method: 'POST', body: JSON.stringify({
+          text: text, type: $('home-add-type').value, scope: 'user', agent: 'web'
+        }) }).then(function (d) {
+          $('home-add-text').value = '';
+          toast('info', d.created ? '已保存 #' + d.id : '相同内容已存在 #' + d.id);
+          return state.userHome.reload(true);
+        }).then(loadStats);
+      });
+    });
+    $('project-add-toggle').addEventListener('click', function () {
+      var form = $('project-add-form');
+      form.hidden = !form.hidden;
+      if (!form.hidden) $('project-add-text').focus();
+    });
+    $('project-add-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var btn = this.querySelector('button');
+      busy(btn, '保存', function () {
+        if (!state.project || !state.project.primary_path) { toast('error', '该项目没有可写路径'); return Promise.resolve(); }
+        var text = $('project-add-text').value.trim();
+        if (!text) { toast('error', '请输入记忆内容'); return Promise.resolve(); }
+        return api('/v1/memory', { method: 'POST', body: JSON.stringify({
+          text: text, type: $('project-add-type').value, scope: 'project',
+          project_path: state.project.primary_path, agent: 'web'
+        }) }).then(function (d) {
+          $('project-add-text').value = '';
+          toast('info', d.created ? '已保存 #' + d.id : '相同内容已存在 #' + d.id);
+          return state.projectMem.reload(true);
+        }).then(loadStats);
+      });
+    });
+  }
+
   function bind() {
     $('refresh-btn').addEventListener('click', function () {
       busy(this, '刷新', refreshCurrent);
@@ -1137,6 +1213,7 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && state.drawer) closeDrawer();
     });
+    bindAddForms();
   }
 
   function init() {
