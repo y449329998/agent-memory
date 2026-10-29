@@ -307,6 +307,11 @@ func (s *Server) handleListMemory(w http.ResponseWriter, r *http.Request) {
 			filter.Limit = n
 		}
 	}
+	if v := q.Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			filter.Offset = n
+		}
+	}
 	ref := q.Get("project_path")
 	if ref == "" {
 		ref = q.Get("project_key")

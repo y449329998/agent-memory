@@ -462,6 +462,7 @@ type MemoryFilter struct {
 	Type        domain.MemoryType
 	Stale       *bool
 	Limit       int
+	Offset      int
 }
 
 func (s *Store) ListMemoriesFiltered(ctx context.Context, f MemoryFilter) ([]domain.MemoryItem, error) {
@@ -494,8 +495,11 @@ func (s *Store) ListMemoriesFiltered(ctx context.Context, f MemoryFilter) ([]dom
 			q += ` AND stale = 0`
 		}
 	}
-	q += ` ORDER BY last_seen_at DESC, id DESC LIMIT ?`
-	args = append(args, f.Limit)
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
+	q += ` ORDER BY last_seen_at DESC, id DESC LIMIT ? OFFSET ?`
+	args = append(args, f.Limit, f.Offset)
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
