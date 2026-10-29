@@ -22,7 +22,7 @@ func TestIndexPage_Contract(t *testing.T) {
 		`id="source-list"`, `id="session-list"`,
 		`id="task-list"`, `id="handoff-body"`, `id="stat-band"`,
 		`id="drawer"`, `id="drawer-close"`, `id="toasts"`, `id="autostart"`,
-		`#/p/`, `立即同步`, `生成交接简报`, `用户级记忆`, `包含过时`,
+		`#/p/`, `/v1/memory/update`, `offset`, `立即同步`, `生成交接简报`, `用户级记忆`, `包含过时`,
 		`prefers-reduced-motion`, `sessionStorage`, `30000`, `focus`, `pointer-events:none`,
 	}
 	for _, want := range mustHave {

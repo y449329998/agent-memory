@@ -423,6 +423,194 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
   function projectLabel(p) { return (p && (p.display_name || p.key)) || '—'; }
   function findProject(key) { return state.projects.filter(function (p) { return p.key === key; })[0] || null; }
 
+  var TYPES = [
+    ['preference', '偏好'], ['constraint', '约束'], ['convention', '约定'],
+    ['lesson', '教训'], ['fact', '事实'], ['goal', '目标']
+  ];
+  function fillTypeSelect(sel, withAll) {
+    if (!sel) return;
+    clear(sel);
+    if (withAll) { var all = el('option', '', '全部类型'); all.value = ''; sel.appendChild(all); }
+    TYPES.forEach(function (t) { var o = el('option', '', t[1]); o.value = t[0]; sel.appendChild(o); });
+  }
+  function normalizeHit(h) {
+    return {
+      ID: h.id, Scope: h.scope, Type: h.type, Text: h.text, Stale: h.stale,
+      LastSeenAt: h.last_seen_at, Sources: h.sources || []
+    };
+  }
+  function memoryItem(m, onOpen) {
+    var li = el('li', 'item item-click');
+    li.tabIndex = 0;
+    var head = el('div', 'item-head');
+    head.appendChild(typeBadge(m.Type));
+    head.appendChild(el('span', 'badge', m.Scope === 'user' ? '用户级' : '项目级'));
+    if (m.Stale) head.appendChild(el('span', 'badge stale', '过时'));
+    li.appendChild(head);
+    var text = (m.Text || '').trim();
+    li.appendChild(el('p', 'item-text', text.length > 180 ? text.slice(0, 180) + '…' : text));
+    var meta = el('div', 'item-meta');
+    var agents = (m.Sources || []).map(function (s) { return s.Agent; });
+    meta.appendChild(el('span', '', '来源：' + (agents.join(' · ') || '—')));
+    meta.appendChild(el('span', '', '最后变更：' + fmtTime(m.LastSeenAt)));
+    li.appendChild(meta);
+    function open() { onOpen(m); }
+    li.addEventListener('click', open);
+    li.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+    });
+    return li;
+  }
+  function memoryView(cfg) {
+    var st = { items: [], total: 0, offset: 0, query: '', loading: false };
+    function projectKey() { return state.project ? state.project.key : ''; }
+    function params() {
+      var p = ['limit=50', 'offset=' + st.offset];
+      if (cfg.scope === 'project') {
+        p.push('scope=project', 'project_key=' + encodeURIComponent(projectKey()));
+      } else {
+        p.push('scope=user');
+      }
+      if ($(cfg.type).value) p.push('type=' + encodeURIComponent($(cfg.type).value));
+      if ($(cfg.stale).checked) p.push('stale=1');
+      return p.join('&');
+    }
+    function render() {
+      var list = $(cfg.list);
+      clear(list);
+      if (!st.items.length) {
+        list.appendChild(el('li', 'muted', st.query ? '没有匹配的记忆。' : '还没有记忆。'));
+        $(cfg.total).textContent = '';
+        $(cfg.more).hidden = true;
+        return;
+      }
+      st.items.forEach(function (m) { list.appendChild(memoryItem(m, openEdit)); });
+      $(cfg.total).textContent = '共 ' + st.total + ' 条' + (st.items.length < st.total ? '，已显示 ' + st.items.length + ' 条' : '');
+      $(cfg.more).hidden = st.query !== '' || st.items.length >= st.total;
+    }
+    function load() {
+      if (st.loading) return Promise.resolve();
+      st.loading = true;
+      if (!st.items.length) {
+        clear($(cfg.list));
+        $(cfg.list).appendChild(el('li', 'muted', '加载中…'));
+      }
+      var req;
+      if (st.query) {
+        req = api('/v1/search', { method: 'POST', body: JSON.stringify({
+          query: st.query, scope: cfg.scope,
+          project_key: cfg.scope === 'project' ? projectKey() : '',
+          type: $(cfg.type).value, include_stale: $(cfg.stale).checked, limit: 50
+        }) }).then(function (d) {
+          var items = (d.hits || []).map(normalizeHit);
+          st.items = items; st.total = items.length; render();
+        });
+      } else {
+        req = api('/v1/memory?' + params()).then(function (d) {
+          var items = d.memories || [];
+          st.items = st.offset === 0 ? items : st.items.concat(items);
+          st.total = typeof d.total === 'number' ? d.total : st.items.length;
+          render();
+        });
+      }
+      return req.catch(function (e) {
+        clear($(cfg.list));
+        $(cfg.list).appendChild(el('li', 'muted', '加载失败：' + e.message));
+        throw e;
+      }).then(function () { st.loading = false; }, function (e) { st.loading = false; throw e; });
+    }
+    function reload(reset) {
+      if (reset !== false) st.offset = 0;
+      return load();
+    }
+    var timer = null;
+    $(cfg.search).addEventListener('input', function () {
+      clearTimeout(timer);
+      timer = setTimeout(function () { st.query = $(cfg.search).value.trim(); reload(true); }, 300);
+    });
+    $(cfg.type).addEventListener('change', function () { reload(true); });
+    $(cfg.stale).addEventListener('change', function () { reload(true); });
+    $(cfg.more).addEventListener('click', function () { st.offset += 50; load(); });
+    return { reload: reload };
+  }
+
+  function openEdit(m) {
+    state.edit = m;
+    state.editOriginal = { text: m.Text || '', type: m.Type || 'fact' };
+    $('memory-text').value = m.Text || '';
+    $('memory-type').value = m.Type || 'fact';
+    var parts = [];
+    parts.push(m.Scope === 'user' ? '用户级（对所有项目生效）' : ('项目级 · ' + (state.project ? projectLabel(state.project) : '')));
+    if (m.Sources && m.Sources.length) {
+      parts.push('来源：' + m.Sources.map(function (s) { return s.Agent + ' · ' + s.Path; }).join('；'));
+    }
+    parts.push('最后变更：' + fmtTime(m.LastSeenAt));
+    $('memory-meta').textContent = parts.join('\n');
+    var imported = m.Sources && m.Sources.length;
+    $('memory-warning').hidden = !imported;
+    $('memory-warning').textContent = imported ? '这条记忆来自 agent 文件，源文件变化后编辑可能被覆盖。' : '';
+    $('memory-stale').textContent = m.Stale ? '恢复使用' : '不再使用';
+    $('edit-drawer').hidden = false;
+    $('edit-backdrop').hidden = false;
+    requestAnimationFrame(function () {
+      $('edit-drawer').classList.add('open');
+      $('edit-backdrop').classList.add('open');
+    });
+    $('memory-text').focus();
+  }
+  function editDirty() {
+    if (!state.edit) return false;
+    return $('memory-text').value !== state.editOriginal.text || $('memory-type').value !== state.editOriginal.type;
+  }
+  function closeEdit(force) {
+    if (!force && editDirty() && !confirm('放弃未保存的修改？')) return;
+    var wasOpen = !!state.edit;
+    state.edit = null;
+    state.editOriginal = null;
+    $('edit-drawer').classList.remove('open');
+    $('edit-backdrop').classList.remove('open');
+    setTimeout(function () {
+      if (state.edit) return;
+      $('edit-drawer').hidden = true;
+      $('edit-backdrop').hidden = true;
+    }, 200);
+    if (wasOpen) refreshLive();
+  }
+  function refreshMemoryViews() {
+    if (state.userHome) state.userHome.reload(false).catch(function () {});
+    if (state.view === 'project') {
+      if (state.projectMem) state.projectMem.reload(false).catch(function () {});
+      if (state.projectUser) state.projectUser.reload(false).catch(function () {});
+    }
+    loadStats().catch(function () {});
+  }
+  function saveEdit() {
+    if (!state.edit) return;
+    var m = state.edit;
+    busy($('memory-save'), '保存', function () {
+      return api('/v1/memory/update', { method: 'POST', body: JSON.stringify({
+        id: m.ID, text: $('memory-text').value, type: $('memory-type').value
+      }) }).then(function (d) {
+        closeEdit(true);
+        toast('info', d.merged_into ? '内容与 #' + d.merged_into + ' 相同，已合并' : '已保存');
+        refreshMemoryViews();
+      });
+    });
+  }
+  function toggleEditStale() {
+    if (!state.edit) return;
+    var m = state.edit, want = !m.Stale;
+    busy($('memory-stale'), want ? '恢复' : '标记', function () {
+      return api('/v1/memory/stale', { method: 'POST', body: JSON.stringify({ id: m.ID, stale: want }) })
+        .then(function () {
+          m.Stale = want;
+          $('memory-stale').textContent = want ? '恢复使用' : '不再使用';
+          toast('info', want ? '已恢复使用' : '已标记为不再使用');
+          refreshMemoryViews();
+        });
+    });
+  }
+
   function loadProjects() {
     return api('/v1/projects').then(function (data) {
       state.projects = (data.projects || []).filter(function (p) { return p && p.key; });
@@ -777,6 +965,16 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     });
     $('drawer-close').addEventListener('click', closeDrawer);
     $('drawer-backdrop').addEventListener('click', closeDrawer);
+    $('edit-close').addEventListener('click', function () { closeEdit(false); });
+    $('memory-cancel').addEventListener('click', function () { closeEdit(false); });
+    $('edit-backdrop').addEventListener('click', function () { closeEdit(false); });
+    $('memory-save').addEventListener('click', saveEdit);
+    $('memory-stale').addEventListener('click', toggleEditStale);
+    document.addEventListener('keydown', function (e) {
+      if (!state.edit) return;
+      if (e.key === 'Escape') closeEdit(false);
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveEdit(); }
+    });
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && state.drawer) closeDrawer();
     });
@@ -791,6 +989,13 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     loadHealth();
     setInterval(loadHealth, 15000);
     loadAutostart();
+    fillTypeSelect($('memory-type'), false);
+    fillTypeSelect($('home-user-type'), true);
+    state.userHome = memoryView({
+      scope: 'user', list: 'home-user-list', total: 'home-user-total',
+      search: 'home-user-search', type: 'home-user-type', stale: 'home-user-stale', more: 'home-user-more'
+    });
+    state.userHome.reload(true).catch(function (e) { toast('error', '读取用户级记忆失败：' + e.message); });
     loadProjects().then(route);
     window.addEventListener('focus', function () { refreshLive(); });
     setInterval(function () { refreshLive(); }, 30000);
