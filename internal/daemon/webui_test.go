@@ -54,7 +54,7 @@ func TestAssets(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/css") {
 		t.Fatalf("css: code=%d type=%q", rec.Code, rec.Header().Get("Content-Type"))
 	}
-	if !strings.Contains(rec.Body.String(), "--paper") {
+	if !strings.Contains(rec.Body.String(), "--bg") {
 		t.Fatal("css should define the paper palette")
 	}
 	rec = webDo(t, s, http.MethodGet, "/assets/app.js", "", nil, nil)

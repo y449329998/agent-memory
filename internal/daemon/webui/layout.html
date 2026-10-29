@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
+<script>try{if(localStorage.getItem("am-theme")==="light")document.documentElement.dataset.theme="light";}catch(e){}</script>
 <title>{{.Title}} · agent-memory</title>
 <link rel="stylesheet" href="/assets/app.css">
 <script src="/assets/app.js" defer></script>
@@ -21,6 +22,7 @@
   </nav>
   <div class="mast-right">
     <span class="health"><span id="health-dot" class="dot"></span><span id="health-text">检查中</span></span>
+    <button id="theme-toggle" class="theme-toggle" type="button" aria-label="切换深浅色" title="切换深浅色">◐</button>
     <button id="sync-btn" class="stamp small" type="button">立即同步</button>
   </div>
 </header>

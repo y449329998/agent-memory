@@ -649,7 +649,25 @@
   }
 
   /* ---------- 启动 ---------- */
+  function initTheme() {
+    const btn = $('theme-toggle');
+    if (!btn) return;
+    function paint() {
+      const light = document.documentElement.dataset.theme === 'light';
+      btn.textContent = light ? '☀' : '☾';
+      btn.title = light ? '切换到深色' : '切换到浅色';
+    }
+    paint();
+    btn.addEventListener('click', () => {
+      const light = document.documentElement.dataset.theme === 'light';
+      if (light) delete document.documentElement.dataset.theme;
+      else document.documentElement.dataset.theme = 'light';
+      try { localStorage.setItem('am-theme', light ? 'dark' : 'light'); } catch (e) {}
+      paint();
+    });
+  }
   function init() {
+    initTheme();
     bindSync();
     revealSections();
     if (!state.token) { showGate(); return; }
