@@ -242,7 +242,8 @@ func runTrayActions(actions trayActions, logger *log.Logger) {
 		case trayEvOpen:
 			actions.OpenWindow()
 		case trayEvSync:
-			actions.Sync()
+			// 扫描可能耗时几十秒；放后台跑，别让「打开界面」「停止服务」排在它后面。
+			go actions.Sync()
 		case trayEvLog:
 			actions.OpenLog()
 		case trayEvToggleAuto:
