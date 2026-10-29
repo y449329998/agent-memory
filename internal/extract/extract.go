@@ -117,13 +117,13 @@ func TaskCard(sess domain.Session, events []domain.SessionEvent, now time.Time) 
 	switch {
 	case errTail >= 2:
 		card.Status = domain.StatusBlocked
-		card.NextSteps = "未解决的报错：" + clip(errorsTail(errors, maxNextRunes), maxNextRunes)
+		card.NextSteps = "未解决的报错：" + clipBlock(errorsTail(errors, maxNextRunes), maxNextRunes)
 	case verified(verification, card.Commands):
 		card.Status = domain.StatusDone
-		card.NextSteps = clip(lastAssistant, maxNextRunes)
+		card.NextSteps = clipBlock(lastAssistant, maxNextRunes)
 	default:
 		card.Status = domain.StatusDoing
-		card.NextSteps = clip(lastAssistant, maxNextRunes)
+		card.NextSteps = clipBlock(lastAssistant, maxNextRunes)
 	}
 
 	decisions := decisionsFrom(events)
@@ -231,6 +231,25 @@ func appendUnique(in []string, v string, cap int) []string {
 // 字段总长，不能因为追加「…」反而多出一个 rune。
 func clip(s string, n int) string {
 	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	if n <= 0 {
+		return ""
+	}
+	return string(r[:n-1]) + "…"
+}
+
+// clipBlock 保留段落换行（供 Web UI 按 Markdown 渲染），只压缩多余空行并截到 n 个 rune。
+// compose 写简报时仍会 oneLine，所以这里保留换行不会污染 HANDOFF.md。
+func clipBlock(s string, n int) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	for strings.Contains(s, "\n\n\n") {
+		s = strings.ReplaceAll(s, "\n\n\n", "\n\n")
+	}
+	s = strings.TrimSpace(s)
 	r := []rune(s)
 	if len(r) <= n {
 		return s

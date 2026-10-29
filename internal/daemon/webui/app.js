@@ -101,6 +101,156 @@
       .replace(/\s+/g, ' ')
       .trim();
   }
+  /* ---------- Markdown 预览（本地渲染，先转义再生成标签） ---------- */
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+  function inlineMd(raw, noLinks) {
+    const codes = [];
+    let s = escapeHtml(raw);
+    s = s.replace(/`([^`\n]+)`/g, function (_, code) {
+      codes.push('<code>' + code + '</code>');
+      return '\u0002' + (codes.length - 1) + '\u0002';
+    });
+    s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+&quot;[^&]*&quot;)?\)/g, function (_, alt) {
+      return '<span class="md-image">[图片] ' + alt + '</span>';
+    });
+    s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function (_, label, url) {
+      if (noLinks || !/^(https?:|mailto:|#|\/)/i.test(url)) return '<span class="md-link">' + label + '</span>';
+      return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
+    });
+    s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+    s = s.replace(/~~([^~\n]+)~~/g, '<del>$1</del>');
+    s = s.replace(/\n/g, '<br>');
+    return s.replace(/\u0002(\d+)\u0002/g, function (_, i) { return codes[+i] || ''; });
+  }
+  function normalizeMarkdown(text) {
+    if (!text || text.indexOf('\n') >= 0) return text;
+    const codes = [];
+    let s = text.replace(/`[^`\n]+`/g, function (code) {
+      codes.push(code);
+      return '\u0003' + (codes.length - 1) + '\u0003';
+    });
+    const bullets = (s.match(/\s[-*+]\s/g) || []).length;
+    const numbered = (s.match(/\s\d+\.\s/g) || []).length;
+    if (!/##/.test(s) && bullets < 2 && numbered < 2) return text;
+    s = s.replace(/\s+(#{1,6}\s+)/g, '\n\n$1');
+    s = s.replace(/\s+([-*+]\s+)/g, '\n$1');
+    s = s.replace(/\s+(\d+\.\s+)/g, '\n$1');
+    return s.replace(/\u0003(\d+)\u0003/g, function (_, i) { return codes[+i] || ''; });
+  }
+  function mdToHtml(source, noLinks) {
+    let src = normalizeMarkdown(String(source || '')).replace(/\r\n?/g, '\n');
+    const fences = [];
+    src = src.replace(/```([^\n`]*)\n([\s\S]*?)```/g, function (_, lang, code) {
+      const cls = lang.trim() ? ' class="language-' + escapeHtml(lang.trim()) + '"' : '';
+      fences.push('<pre class="md-code"><code' + cls + '>' + escapeHtml(code.replace(/\n$/, '')) + '</code></pre>');
+      return '\n\u0001' + (fences.length - 1) + '\u0001\n';
+    });
+    const lines = src.split('\n');
+    const out = [];
+    const isBlockStart = function (line, next) {
+      if (!line.trim()) return true;
+      if (/^\u0001\d+\u0001$/.test(line.trim())) return true;
+      if (/^\s{0,3}#{1,6}\s+/.test(line)) return true;
+      if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) return true;
+      if (/^\s*>/.test(line)) return true;
+      if (/^\s*(?:[-*+]|\d+\.)\s+/.test(line)) return true;
+      if (line.includes('|') && next !== undefined && /^\s*\|?[\s:|-]*-{2,}[\s:|-]*\|?\s*$/.test(next)) return true;
+      return false;
+    };
+    const splitRow = function (row) {
+      return row.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(function (c) { return c.trim(); });
+    };
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (!line.trim()) { i++; continue; }
+      const fence = line.trim().match(/^\u0001(\d+)\u0001$/);
+      if (fence) { out.push(fences[+fence[1]]); i++; continue; }
+      const heading = line.match(/^\s{0,3}(#{1,6})\s+(.*)$/);
+      if (heading) {
+        const level = heading[1].length;
+        out.push('<h' + level + '>' + inlineMd(heading[2], noLinks) + '</h' + level + '>');
+        i++; continue;
+      }
+      if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) { out.push('<hr>'); i++; continue; }
+      if (/^\s*>/.test(line)) {
+        const quote = [];
+        while (i < lines.length && /^\s*>/.test(lines[i])) {
+          quote.push(inlineMd(lines[i].replace(/^\s*>\s?/, ''), noLinks));
+          i++;
+        }
+        out.push('<blockquote>' + quote.join('<br>') + '</blockquote>');
+        continue;
+      }
+      if (line.includes('|') && i + 1 < lines.length && /^\s*\|?[\s:|-]*-{2,}[\s:|-]*\|?\s*$/.test(lines[i + 1])) {
+        const head = splitRow(line);
+        const rows = [];
+        i += 2;
+        while (i < lines.length && lines[i].trim() && lines[i].includes('|')) {
+          rows.push(splitRow(lines[i]));
+          i++;
+        }
+        let table = '<div class="md-table"><table><thead><tr>' +
+          head.map(function (c) { return '<th>' + inlineMd(c, noLinks) + '</th>'; }).join('') +
+          '</tr></thead><tbody>';
+        rows.forEach(function (row) {
+          table += '<tr>' + head.map(function (_, idx) { return '<td>' + inlineMd(row[idx] || '', noLinks) + '</td>'; }).join('') + '</tr>';
+        });
+        out.push(table + '</tbody></table></div>');
+        continue;
+      }
+      if (/^\s*(?:[-*+]|\d+\.)\s+/.test(line)) {
+        const ordered = /^\s*\d+\.\s+/.test(line);
+        const items = [];
+        while (i < lines.length) {
+          const item = lines[i].match(/^\s*(?:[-*+]|\d+\.)\s+(.*)$/);
+          if (!item) break;
+          let text = item[1];
+          i++;
+          while (i < lines.length && lines[i].trim() && !/^\s*(?:[-*+]|\d+\.)\s+/.test(lines[i]) && !isBlockStart(lines[i], lines[i + 1])) {
+            text += '\n' + lines[i].trim();
+            i++;
+          }
+          items.push(inlineMd(text, noLinks));
+        }
+        out.push((ordered ? '<ol>' : '<ul>') + items.map(function (x) { return '<li>' + x + '</li>'; }).join('') + (ordered ? '</ol>' : '</ul>'));
+        continue;
+      }
+      const para = [line];
+      i++;
+      while (i < lines.length && lines[i].trim() && !isBlockStart(lines[i], lines[i + 1])) {
+        para.push(lines[i]);
+        i++;
+      }
+      out.push('<p>' + inlineMd(para.join('\n'), noLinks) + '</p>');
+    }
+    return out.join('\n') || '<p class="md-empty">无内容</p>';
+  }
+  function renderMd(node, text, noLinks) {
+    if (!node) return;
+    const parsed = new DOMParser().parseFromString(mdToHtml(text, noLinks), 'text/html');
+    clear(node);
+    Array.from(parsed.body.childNodes).forEach(function (child) { node.appendChild(child); });
+  }
+  function attachExpand(block) {
+    requestAnimationFrame(function () {
+      if (!block.isConnected || block.scrollHeight <= block.clientHeight + 8) return;
+      const btn = el('button', 'stamp small ghost md-more', '展开全文');
+      btn.type = 'button';
+      btn.addEventListener('click', function () {
+        const open = block.classList.toggle('open');
+        btn.textContent = open ? '收起' : '展开全文';
+      });
+      block.after(btn);
+    });
+  }
   function clipText(text, n) {
     const chars = Array.from(text);
     return chars.length > n ? chars.slice(0, n - 1).join('') + '…' : text;
@@ -178,7 +328,9 @@
     head.appendChild(el('span', 'meta', m.Scope === 'user' ? '用户级' : '项目级'));
     if (m.Stale) head.appendChild(el('span', 'stamp tiny stale-mark', '过时'));
     a.appendChild(head);
-    a.appendChild(el('p', 'entry-text', clip(plainPreview(m.Text || ''), 240)));
+    const preview = el('div', 'entry-text md md-clamp entry-md');
+    renderMd(preview, clip(m.Text || '', 3000), true);
+    a.appendChild(preview);
     const meta = el('div', 'entry-meta');
     const agents = (m.Sources || []).map((s) => s.Agent).filter(Boolean);
     meta.appendChild(el('span', '', '来源：' + (agents.join(' · ') || '—')));
@@ -373,12 +525,12 @@
         head.appendChild(el('strong', '', clipText(plainPreview(c.Goal || '（无目标）'), 160)));
         head.appendChild(statusStamp(c.Status));
         card.appendChild(head);
-        const next = clipText(plainPreview(c.NextSteps || ''), 260);
-        if (next) {
-          const p = el('p', '');
-          p.appendChild(el('span', 'meta', '下一步：'));
-          p.appendChild(document.createTextNode(next));
-          card.appendChild(p);
+        if (c.NextSteps) {
+          card.appendChild(el('div', 'meta', '下一步'));
+          const md = el('div', 'md md-clamp card-md');
+          renderMd(md, c.NextSteps);
+          card.appendChild(md);
+          attachExpand(md);
         }
         card.appendChild(el('div', 'meta', '最近活动：' + fmtTime(c.UpdatedAt)));
         if (c.Files && c.Files.length) {
@@ -400,7 +552,7 @@
   async function fetchHandoff(key) {
     const d = await api('/v1/handoff?project_key=' + enc(key) + '&format=json');
     const body = d.body || '';
-    $('handoff-body').textContent = body || '无';
+    renderMd($('handoff-body'), body || '无');
     $('handoff-meta').textContent = '约 ' + body.length + ' 字' + (d.truncated ? ' · 已按预算精简' : '');
   }
   async function loadHandoff(key) {
@@ -418,7 +570,7 @@
       busy(this, '生成', async () => {
         const d = await api('/v1/handoff', { method: 'POST', body: JSON.stringify({ project_path: state.project.primary_path, write: true }) });
         const body = d.body || '';
-        $('handoff-body').textContent = body || '无';
+        renderMd($('handoff-body'), body || '无');
         $('handoff-meta').textContent = '约 ' + body.length + ' 字' + (d.changed ? ' · 已更新' : ' · 内容无变化');
         toast('info', d.changed ? '已更新项目里的交接简报' : '内容无变化，未重写');
       });
@@ -600,6 +752,18 @@
     const id = document.body.dataset.memoryId || '';
     const params = new URLSearchParams(location.search);
     const next = safeNext(params.get('next')) || '/memories';
+    const textarea = $('edit-text');
+    const preview = $('edit-preview');
+    let previewTimer = 0;
+    function renderEditPreview() {
+      if (preview) renderMd(preview, textarea.value || '');
+    }
+    textarea.addEventListener('input', function () {
+      if (!preview) return;
+      clearTimeout(previewTimer);
+      previewTimer = setTimeout(renderEditPreview, 100);
+    });
+    renderEditPreview();
     $('back-link').href = next;
     $('edit-cancel').href = next;
     fillTypeSelect($('edit-type'), false, 'fact');
@@ -607,7 +771,8 @@
       state.memory = m;
       document.title = '编辑记忆 #' + m.ID + ' · agent-memory';
       $('memory-id').textContent = '#' + m.ID;
-      $('edit-text').value = m.Text || '';
+      textarea.value = m.Text || '';
+      renderEditPreview();
       fillTypeSelect($('edit-type'), false, m.Type || 'fact');
       $('edit-scope').textContent = m.Scope === 'user' ? '用户级' : '项目级';
       const imported = (m.Sources || []).some((s) => s.Path && s.Path !== 'mcp');
@@ -618,7 +783,8 @@
       $('edit-stale').textContent = m.Stale ? '恢复使用' : '不再使用';
       $('edit-stale').dataset.stale = m.Stale ? '1' : '0';
     }).catch((e) => {
-      $('edit-text').value = '';
+      textarea.value = '';
+      renderEditPreview();
       $('edit-meta').textContent = '读取失败：' + e.message;
     });
     $('edit-form').addEventListener('submit', (e) => {

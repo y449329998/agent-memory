@@ -1,11 +1,14 @@
 {{define "content"}}
 <nav class="crumbs" aria-label="面包屑"><a href="/">总览</a><span class="sep">/</span><a id="back-link" href="/memories">记忆档案</a><span class="sep">/</span><span>编辑</span></nav>
 
-<article class="sheet rise">
+<article class="sheet wide rise">
   <p class="kicker">EDIT MEMORY <span id="memory-id" class="mono"></span></p>
   <h1 class="display-sm">修一条记忆</h1>
   <form id="edit-form" class="stack">
-    <label class="field"><span class="label">正文</span><textarea id="edit-text" rows="10" required></textarea></label>
+    <div class="edit-split">
+      <label class="field"><span class="label">正文 · Markdown</span><textarea id="edit-text" rows="16" required></textarea></label>
+      <div class="field"><span class="label">实时预览</span><div id="edit-preview" class="md preview-pane"></div></div>
+    </div>
     <div class="row">
       <label class="field inline"><span class="label">类型</span><select id="edit-type"></select></label>
       <span id="edit-scope" class="stamp tiny"></span>

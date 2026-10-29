@@ -177,6 +177,17 @@ func TestTaskCard_StatusDoingWhenWorkRemains(t *testing.T) {
 	}
 }
 
+func TestTaskCard_NextStepsKeepsMarkdownBlocks(t *testing.T) {
+	events := []domain.SessionEvent{
+		ev(1, domain.KindUserText, "重构报表查询"),
+		ev(2, domain.KindAssistant, "## 改动\n\n- 拆出 createWhere\n\n```go\nfoo()\n```"),
+	}
+	card, _ := TaskCard(domain.Session{ID: 1}, events, time.Now())
+	if !strings.Contains(card.NextSteps, "## 改动\n\n- 拆出 createWhere") || !strings.Contains(card.NextSteps, "```go\nfoo()\n```") {
+		t.Fatalf("next steps lost markdown structure: %q", card.NextSteps)
+	}
+}
+
 func TestTaskCard_NoUserTextYieldsNoCard(t *testing.T) {
 	events := []domain.SessionEvent{
 		ev(2, domain.KindToolEdit, "svc.go", `F:\a\svc.go`),
