@@ -374,6 +374,13 @@ func (r *Runner) resolveProject(ctx context.Context, agent, slug, path, confiden
 		if slug == "" {
 			return 0, fmt.Errorf("project without usable path or slug (agent %s)", agent)
 		}
+		// 已知归属的 agent 记忆桶（如 Qoder 项目目录）走别名，避免每次扫描
+		// 都把同一批记忆复制成一个孤立项目。
+		if id, ok, err := r.store.ProjectByAlias(ctx, agent, slug); err != nil {
+			return 0, err
+		} else if ok {
+			return id, nil
+		}
 		return r.store.EnsureProject(ctx, agent+":"+slug, slug, "", "", at)
 	}
 	id, _, err := r.store.ResolveOrCreateProject(ctx, agent, slug, path, at)

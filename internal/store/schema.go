@@ -30,6 +30,18 @@ CREATE TABLE IF NOT EXISTS project_path (
   UNIQUE(project_id, agent, path)
 );
 
+-- project_alias 把 agent 的低置信记忆桶（agent:slug）固定归属到某个项目。
+-- 这类 slug 目录没有可解析的工作区路径，重扫时只能按 key 建项目；
+-- 没有别名时会把已知项目的记忆复制成孤立项目。
+CREATE TABLE IF NOT EXISTS project_alias (
+  id         INTEGER PRIMARY KEY,
+  agent      TEXT NOT NULL,
+  slug       TEXT NOT NULL,
+  project_id INTEGER NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  UNIQUE(agent, slug)
+);
+
 CREATE TABLE IF NOT EXISTS source (
   id            INTEGER PRIMARY KEY,
   agent         TEXT NOT NULL,

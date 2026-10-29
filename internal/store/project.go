@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/muyi99/agent-memory/internal/domain"
@@ -102,6 +103,44 @@ FROM project WHERE id = ?`, id).Scan(
 	p.CreatedAt = time.Unix(created, 0)
 	p.UpdatedAt = time.Unix(updated, 0)
 	return p, true, nil
+}
+
+// SetProjectAlias 让某个 agent 的 slug 固定归属到一个项目。
+// agent/slug 统一小写去空白，避免调用方大小写不一致导致别名不生效。
+func (s *Store) SetProjectAlias(ctx context.Context, projectID int64, agent, slug string, at time.Time) error {
+	agent = strings.ToLower(strings.TrimSpace(agent))
+	slug = strings.ToLower(strings.TrimSpace(slug))
+	if projectID == 0 || agent == "" || slug == "" {
+		return errors.New("project alias needs project id, agent and slug")
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO project_alias(agent, slug, project_id, created_at)
+VALUES(?, ?, ?, ?)
+ON CONFLICT(agent, slug) DO UPDATE SET project_id = excluded.project_id`,
+		agent, slug, projectID, at.Unix())
+	if err != nil {
+		return fmt.Errorf("set project alias %s:%s: %w", agent, slug, err)
+	}
+	return nil
+}
+
+// ProjectByAlias 查低置信记忆桶的归属项目；没有别名返回 false。
+func (s *Store) ProjectByAlias(ctx context.Context, agent, slug string) (int64, bool, error) {
+	agent = strings.ToLower(strings.TrimSpace(agent))
+	slug = strings.ToLower(strings.TrimSpace(slug))
+	if agent == "" || slug == "" {
+		return 0, false, nil
+	}
+	var id int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT project_id FROM project_alias WHERE agent = ? AND slug = ?`, agent, slug).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return id, true, nil
 }
 
 // LinkProjectPath 登记「某 agent 在某处把这个项目写成什么路径」。path 先归一化再存，

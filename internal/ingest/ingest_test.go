@@ -805,3 +805,34 @@ func TestRun_ExistingCardIsNotOverwritten(t *testing.T) {
 	}
 	t.Logf("second scan: %s", second.String())
 }
+
+// 低置信记忆桶配置了别名时，草稿直接归到目标项目，不再按 agent:slug 新建。
+func TestRun_AliasResolvesLowConfidenceSlug(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, ".qoder-cn")
+	slug := "Z--some-project"
+	write(t, filepath.Join(home, "projects", slug, "memory", "m.md"), "项目级记忆\n")
+
+	s := openTempStore(t)
+	ctx := context.Background()
+	target, err := s.EnsureProject(ctx, "e:/company/target", "target", "", `E:\company\target`, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetProjectAlias(ctx, target, "qoder", slug, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(s, qoder.New(home)).Run(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := mustInt(t, s, `SELECT count(*) FROM project`); got != 1 {
+		t.Fatalf("projects = %d, want 1 (alias target only)", got)
+	}
+	if got := mustInt(t, s, `SELECT count(*) FROM memory_item WHERE project_id = ?`, target); got != 1 {
+		t.Fatalf("target memories = %d, want 1", got)
+	}
+	if got := mustInt(t, s, `SELECT count(*) FROM project WHERE key LIKE 'qoder:%'`); got != 0 {
+		t.Fatalf("alias slug must not create its own project, got %d", got)
+	}
+}

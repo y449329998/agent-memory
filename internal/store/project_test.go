@@ -348,3 +348,57 @@ func TestResolveOrCreateProject_FallsBackToPathKey(t *testing.T) {
 		t.Fatalf("project rows = %d, want 1", n)
 	}
 }
+
+func TestProjectAlias_ResolvesAndReassigns(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0)
+	legacy, err := s.EnsureProject(ctx, "qoder:Slug", "Slug", "", "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := s.EnsureProject(ctx, "e:/company/target", "target", "", `E:\company\target`, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok, err := s.ProjectByAlias(ctx, "qoder", "slug"); err != nil || ok {
+		t.Fatalf("alias before set: ok=%v err=%v", ok, err)
+	}
+	// 写入时大小写不敏感，查询同样。
+	if err := s.SetProjectAlias(ctx, target, "Qoder", "SLUG", now); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.ProjectByAlias(ctx, "qoder", "slug")
+	if err != nil || !ok || got != target {
+		t.Fatalf("alias = %d, ok=%v, err=%v; want %d", got, ok, err, target)
+	}
+	// 再次设置即改绑，不产生第二行。
+	if err := s.SetProjectAlias(ctx, legacy, "qoder", "slug", now); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := s.ProjectByAlias(ctx, "qoder", "slug"); got != legacy {
+		t.Fatalf("alias after rebind = %d, want %d", got, legacy)
+	}
+	if n, _ := s.QueryInt(ctx, `SELECT count(*) FROM project_alias`); n != 1 {
+		t.Fatalf("alias rows = %d, want 1", n)
+	}
+}
+
+func TestProjectAlias_CascadesWithProject(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	id, err := s.EnsureProject(ctx, "e:/company/target", "target", "", `E:\company\target`, time.Unix(1700000000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetProjectAlias(ctx, id, "qoder", "slug", time.Unix(1700000000, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM project WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := s.ProjectByAlias(ctx, "qoder", "slug"); err != nil || ok {
+		t.Fatalf("alias should be gone with project: ok=%v err=%v", ok, err)
+	}
+}
