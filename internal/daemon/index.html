@@ -363,7 +363,10 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
       var stored = '';
       try { stored = localStorage.getItem(PROJECT_KEY) || ''; } catch (e) {}
       var want = keep || stored;
-      var valid = state.projects.some(function (p) { return p.key === want; });
+      var hasExisting = state.projects.some(function (p) { return p.path_exists; });
+      var candidate = state.projects.filter(function (p) { return p.key === want; })[0];
+      // 记住的项目如果路径已不存在，而库里还有可用项目，就不要自动跳回去。
+      var valid = candidate && (candidate.path_exists || !hasExisting);
       if (!valid) {
         var best = null;
         state.projects.forEach(function (p) {
@@ -870,6 +873,8 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
   }
 
   function init() {
+    try { if ('scrollRestoration' in history) history.scrollRestoration = 'manual'; } catch (e) {}
+    window.scrollTo(0, 0);
     bind();
     if (!state.token) { showNoToken(); return; }
     loadHealth();
