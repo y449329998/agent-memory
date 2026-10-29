@@ -62,6 +62,7 @@ func New(cfg Config, st *store.Store) *Server {
 	s.mux.HandleFunc("POST /v1/scan", s.writeAuth(s.handleScan))
 	s.mux.HandleFunc("POST /v1/handoff", s.writeAuth(s.handleHandoffWrite))
 	s.mux.HandleFunc("POST /v1/memory/stale", s.writeAuth(s.handleSetStale))
+	s.mux.HandleFunc("POST /v1/memory/update", s.writeAuth(s.handleUpdateMemory))
 	s.mux.HandleFunc("POST /mcp", s.auth(s.handleMCP))
 	s.mux.HandleFunc("POST /v1/shutdown", s.writeAuth(s.handleShutdown))
 	s.mux.HandleFunc("GET /v1/desktop-settings", s.auth(s.handleDesktopSettingsGet))
@@ -288,6 +289,37 @@ func (s *Server) handleAddMemory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": res.ID, "created": res.Created, "scope": res.Scope, "type": res.Type,
 	})
+}
+
+type updateMemoryRequest struct {
+	ID   int64  `json:"id"`
+	Text string `json:"text"`
+	Type string `json:"type"`
+}
+
+func (s *Server) handleUpdateMemory(w http.ResponseWriter, r *http.Request) {
+	var req updateMemoryRequest
+	if err := decodeJSON(r, &req); err != nil {
+		httpError(w, err)
+		return
+	}
+	if req.ID <= 0 {
+		http.Error(w, "id is required", http.StatusBadRequest)
+		return
+	}
+	merged, err := s.st.UpdateMemory(r.Context(), req.ID, req.Text, domain.MemoryType(req.Type), time.Now())
+	switch {
+	case errors.Is(err, domain.ErrMemoryNotFound):
+		http.Error(w, "memory not found", http.StatusNotFound)
+		return
+	case errors.Is(err, domain.ErrEmptyMemory), errors.Is(err, domain.ErrInvalidMemoryType):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	case err != nil:
+		httpError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": req.ID, "merged_into": merged})
 }
 
 func (s *Server) handleListMemory(w http.ResponseWriter, r *http.Request) {
