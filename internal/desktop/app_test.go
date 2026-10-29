@@ -190,3 +190,60 @@ func serverPort(t *testing.T, srv *httptest.Server) int {
 	}
 	return port
 }
+
+func TestWindowStateRoundTripAndClamp(t *testing.T) {
+	dir := t.TempDir()
+	if _, ok := loadWindowState(dir); ok {
+		t.Fatal("empty dir should have no state")
+	}
+	if err := saveWindowState(dir, windowState{X: 100, Y: 80, W: 1000, H: 700}); err != nil {
+		t.Fatal(err)
+	}
+	st, ok := loadWindowState(dir)
+	if !ok || st.W != 1000 || st.X != 100 {
+		t.Fatalf("roundtrip: %+v ok=%v", st, ok)
+	}
+
+	off := clampWindowState(windowState{X: -5000, Y: -5000, W: 1200, H: 820}, 1920, 1080, 1200, 820)
+	if off.X != 360 || off.Y != 130 || off.W != 1200 {
+		t.Fatalf("off-screen clamp: %+v", off)
+	}
+	small := clampWindowState(windowState{X: 10, Y: 10, W: 300, H: 200}, 1920, 1080, 1200, 820)
+	if small.W != 1200 || small.H != 820 {
+		t.Fatalf("too-small clamp: %+v", small)
+	}
+	keep := clampWindowState(windowState{X: 50, Y: 40, W: 1100, H: 760}, 1920, 1080, 1200, 820)
+	if keep.X != 50 || keep.W != 1100 {
+		t.Fatalf("valid state should be kept: %+v", keep)
+	}
+}
+
+func TestWindowRequestChannelBuffersOne(t *testing.T) {
+	resetWindowRequests()
+	requestWindow()
+	requestWindow() // 第二次不应阻塞
+	select {
+	case <-takeWindowRequest():
+	default:
+		t.Fatal("want buffered request")
+	}
+	select {
+	case <-takeWindowRequest():
+		t.Fatal("only one request should be buffered")
+	default:
+	}
+}
+
+func TestDesktopFileRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	if _, ok := readDesktopFile(dir); ok {
+		t.Fatal("empty dir should have no desktop.json")
+	}
+	if err := writeDesktopFile(dir, `C:\bin\agent-memory-app.exe`); err != nil {
+		t.Fatal(err)
+	}
+	f, ok := readDesktopFile(dir)
+	if !ok || f.AppPath != `C:\bin\agent-memory-app.exe` {
+		t.Fatalf("roundtrip: %+v ok=%v", f, ok)
+	}
+}

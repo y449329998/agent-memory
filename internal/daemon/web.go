@@ -222,3 +222,42 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sources": rows, "count": len(rows), "total": total})
 }
+
+// handleShutdown 受理托盘「停止服务并退出」：先应答再异步取消服务上下文。
+func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	if s.cfg.Shutdown != nil {
+		go s.cfg.Shutdown()
+	}
+}
+
+type desktopSettings struct {
+	Autostart bool   `json:"autostart"`
+	Command   string `json:"command,omitempty"`
+}
+
+// handleDesktopSettingsGet 读取开机自启状态（注册表 + 桌面应用写入的路径）。
+func (s *Server) handleDesktopSettingsGet(w http.ResponseWriter, r *http.Request) {
+	enabled, command := desktopAutostartState()
+	writeJSON(w, http.StatusOK, desktopSettings{Autostart: enabled, Command: command})
+}
+
+// handleDesktopSettingsSet 写/删 HKCU Run。没有 desktop.json 时返回 400，
+// 提示先去打开一次桌面应用——否则写进去的自启命令是空的。
+func (s *Server) handleDesktopSettingsSet(w http.ResponseWriter, r *http.Request) {
+	var req desktopSettings
+	if err := decodeJSON(r, &req); err != nil {
+		httpError(w, err)
+		return
+	}
+	appPath, ok := desktopAppPathFromFile(s.cfg.DataDir)
+	if !ok {
+		http.Error(w, "还没有打开过桌面应用：先运行一次 agent-memory-app.exe", http.StatusBadRequest)
+		return
+	}
+	if err := desktopSetAutostart(req.Autostart, appPath); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, desktopSettings{Autostart: req.Autostart})
+}

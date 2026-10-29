@@ -261,3 +261,6 @@ func Save(path string, c Config) error {
 	defer f.Close()
 	return toml.NewEncoder(f).Encode(c)
 }
+
+// AppLogPath 是桌面应用与服务子进程共用的日志文件。
+func (c Config) AppLogPath() string { return filepath.Join(c.DataDir, "app.log") }

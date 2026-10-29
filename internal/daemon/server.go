@@ -34,6 +34,8 @@ type Config struct {
 	RecentCards  int
 	// Scan 由 cmdServe 注入「扫一轮 + 刷新简报」的编排；未注入时 /v1/scan 回 501。
 	Scan func(context.Context) (map[string]any, error)
+	// Shutdown 由 cmdServe 注入；托盘「停止服务并退出」会调用它。
+	Shutdown func()
 }
 
 // Server 是回环 HTTP 服务。它把 store 的能力摊成 JSON 接口，
@@ -61,6 +63,9 @@ func New(cfg Config, st *store.Store) *Server {
 	s.mux.HandleFunc("POST /v1/handoff", s.writeAuth(s.handleHandoffWrite))
 	s.mux.HandleFunc("POST /v1/memory/stale", s.writeAuth(s.handleSetStale))
 	s.mux.HandleFunc("POST /mcp", s.auth(s.handleMCP))
+	s.mux.HandleFunc("POST /v1/shutdown", s.writeAuth(s.handleShutdown))
+	s.mux.HandleFunc("GET /v1/desktop-settings", s.auth(s.handleDesktopSettingsGet))
+	s.mux.HandleFunc("POST /v1/desktop-settings", s.writeAuth(s.handleDesktopSettingsSet))
 	return s
 }
 

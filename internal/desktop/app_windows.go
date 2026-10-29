@@ -18,8 +18,9 @@ func prepareChild(cmd *exec.Cmd) {
 }
 
 // openWindow 用 WebView2 打开共享记忆页面，阻塞到窗口关闭。
+// initial 非空时套用上次的位置与大小；关闭时通过 onClose 回传最终位置。
 // webview2 的窗口消息循环必须和建窗在同一个 OS 线程上，所以锁定当前线程。
-func openWindow(link string) (err error) {
+func openWindow(link string, initial *windowState, onClose func(windowState)) (err error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -43,9 +44,24 @@ func openWindow(link string) (err error) {
 	}
 	defer w.Destroy()
 
-	// 该版本的 WindowOptions 没有 Hint 字段，用 SetSize 显式套用 HintNone。
 	w.SetSize(windowWidth, windowHeight, webview2.HintNone)
 	w.Navigate(link)
+
+	hwnd := findWindow(appTitle)
+	if initial != nil {
+		if hwnd != 0 {
+			applyWindowState(hwnd, *initial)
+		} else {
+			w.SetSize(initial.W, initial.H, webview2.HintNone)
+		}
+	}
+
 	w.Run()
+
+	if onClose != nil {
+		if st, ok := currentWindowRect(hwnd); ok {
+			onClose(st)
+		}
+	}
 	return nil
 }

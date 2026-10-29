@@ -1,5 +1,6 @@
 // Package desktop 提供双击即用的桌面入口：确保配置与数据库存在，
-// 复用或拉起 serve，然后用 WebView2（失败时回退浏览器 --app 窗口）打开共享记忆页面。
+// 复用或拉起 serve，用 WebView2（失败时回退浏览器 --app 窗口）打开共享记忆页面，
+// 并驻留系统托盘——关窗不退出，托盘可重开窗口、同步、停止服务。
 package desktop
 
 import (
@@ -38,62 +39,141 @@ type Options struct {
 	UserHome string
 	SelfPath string
 	Logger   *log.Logger
+	// TrayOnly 为 true 时只驻留托盘、不打开窗口（开机自启用）。
+	TrayOnly bool
 }
 
-// Run 完成桌面版的完整流程：配置 → 令牌 → 复用/启动 serve → 打开窗口。
-// 窗口关闭后返回；只有本进程拉起的 serve 才会在退出时被结束。
-func Run(ctx context.Context, opts Options) error {
-	cfg, err := ensureConfig(opts.UserHome)
-	if err != nil {
-		return fmt.Errorf("初始化配置失败：%w", err)
-	}
+// windowReq 容量为 1：托盘连续点击只保留一次「开窗」请求，
+// 避免关闭窗口瞬间连点导致叠出多个窗口。
+var windowReq = make(chan struct{}, 1)
 
-	logger, closeLog, err := openAppLog(cfg, opts.Logger)
+func requestWindow() {
+	select {
+	case windowReq <- struct{}{}:
+	default:
+	}
+}
+
+func takeWindowRequest() <-chan struct{} { return windowReq }
+
+func resetWindowRequests() {
+	for {
+		select {
+		case <-windowReq:
+		default:
+			return
+		}
+	}
+}
+
+// Run 启动桌面应用：单实例 → 托盘 → 主窗口（TrayOnly 时不开窗）。
+// 关窗后进程驻留托盘；托盘「停止服务并退出」才结束进程。
+func Run(ctx context.Context, opts Options) error {
+	if err := acquireSingleInstance(); err != nil {
+		if errors.Is(err, errAlready) {
+			focusExistingWindow(appTitle)
+			MessageBox("agent-memory", "agent-memory 已在运行（见系统托盘）。")
+			return nil
+		}
+		return err
+	}
+	defer releaseSingleInstance()
+
+	cfg, logger, closeLog, err := bootConfig(opts)
 	if err != nil {
-		return fmt.Errorf("打开日志失败：%w", err)
+		return err
 	}
 	defer closeLog()
-	logger.Printf("desktop 启动：self=%s data=%s", opts.SelfPath, cfg.DataDir)
+	if err := writeDesktopFile(cfg.DataDir, opts.SelfPath); err != nil {
+		logger.Printf("写入 desktop.json 失败：%v", err)
+	}
 
+	port, err := ensureServe(ctx, opts.SelfPath, cfg, logger)
+	if err != nil {
+		return err
+	}
 	token, err := ensureToken(cfg)
 	if err != nil {
 		return fmt.Errorf("读取访问令牌失败：%w", err)
 	}
+	link := buildURL(port, token)
 
-	port, running := findRunningDaemon(cfg)
-	if running {
-		logger.Printf("复用已在运行的 serve：端口 %d", port)
-	} else {
-		_, p, err := startServe(ctx, opts.SelfPath, cfg)
-		if err != nil {
-			logger.Printf("启动 serve 失败：%v", err)
-			return fmt.Errorf("启动共享记忆服务失败（端口 %d 可能被占用）：%w", preferredPort, err)
-		}
-		port = p
-		// 服务不随窗口退出：agent 的 MCP 调用不该因为用户关掉窗口就中断。
-		// 停服务请用任务管理器或重启机器；后续可加托盘菜单。
-		logger.Printf("已启动内置 serve：端口 %d（关窗后继续运行）", port)
+	quit := make(chan struct{}, 1)
+	actions := trayActions{
+		OpenWindow: func() { requestWindow() },
+		Sync: func() {
+			if err := postJSON(port, token, "/v1/scan"); err != nil {
+				logger.Printf("托盘同步失败：%v", err)
+			}
+		},
+		OpenLog: func() {
+			if err := exec.Command("notepad", cfg.AppLogPath()).Start(); err != nil {
+				logger.Printf("打开日志失败：%v", err)
+			}
+		},
+		AutostartOn: func() bool { on, _ := autostartEnabled(); return on },
+		ToggleAuto:  func(v bool) error { return setAutostart(v, opts.SelfPath) },
+		StopAndQuit: func() {
+			if err := postJSON(port, token, "/v1/shutdown"); err != nil {
+				logger.Printf("停止服务失败：%v", err)
+			}
+			select {
+			case quit <- struct{}{}:
+			default:
+			}
+		},
 	}
 
-	link := buildURL(port, token)
-	if webview2Available() {
-		if err := openWindow(link); err != nil {
-			// 窗口失败不致命：写清原因后回退到浏览器 --app 模式。
-			logger.Printf("WebView2 窗口打开失败：%v；改用浏览器 --app 模式", err)
-		} else {
-			logger.Printf("窗口已关闭")
+	if _, err := startTray(actions, logger); err != nil {
+		logger.Printf("托盘启动失败，降级为关窗即退出：%v", err)
+		if !opts.TrayOnly {
+			openWindowOnce(link, cfg, logger)
+		}
+		return nil
+	}
+
+	if !opts.TrayOnly {
+		openWindowOnce(link, cfg, logger)
+	}
+	for {
+		select {
+		case <-quit:
+			return nil
+		case <-takeWindowRequest():
+			openWindowOnce(link, cfg, logger)
+		case <-ctx.Done():
 			return nil
 		}
-	} else {
-		logger.Printf("未检测到 WebView2 运行时；改用浏览器 --app 模式")
 	}
+}
 
-	if err := openBrowserApp(link); err != nil {
-		logger.Printf("浏览器窗口打开失败：%v", err)
-		return fmt.Errorf("打开窗口失败：%w", err)
+// bootConfig 合并「准备配置/数据库」与「打开日志」两步。
+func bootConfig(opts Options) (config.Config, *log.Logger, func(), error) {
+	cfg, err := ensureConfig(opts.UserHome)
+	if err != nil {
+		return config.Config{}, nil, nil, fmt.Errorf("初始化配置失败：%w", err)
 	}
-	logger.Printf("浏览器窗口已关闭")
-	return nil
+	logger, closeLog, err := openAppLog(cfg, opts.Logger)
+	if err != nil {
+		return config.Config{}, nil, nil, fmt.Errorf("打开日志失败：%w", err)
+	}
+	logger.Printf("desktop 启动：self=%s data=%s trayOnly=%v", opts.SelfPath, cfg.DataDir, opts.TrayOnly)
+	return cfg, logger, closeLog, nil
+}
+
+// ensureServe 复用或拉起 serve，返回实际端口。子进程不随窗口退出。
+func ensureServe(ctx context.Context, selfPath string, cfg config.Config, logger *log.Logger) (int, error) {
+	if port, ok := findRunningDaemon(cfg); ok {
+		logger.Printf("复用已在运行的 serve：端口 %d", port)
+		return port, nil
+	}
+	_, port, err := startServe(ctx, selfPath, cfg)
+	if err != nil {
+		logger.Printf("启动 serve 失败：%v", err)
+		return 0, fmt.Errorf("启动共享记忆服务失败（端口 %d 可能被占用）：%w", preferredPort, err)
+	}
+	logger.Printf("已启动内置 serve：端口 %d（关窗后继续运行）", port)
+	return port, nil
 }
 
 // ensureConfig 读取配置；配置文件不存在时写入默认值。
@@ -153,13 +233,32 @@ func healthy(port int, timeout time.Duration) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
+// postJSON 用 Bearer 调一个无 body 的写接口。
+func postJSON(port int, token, path string) error {
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d%s", port, path), nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("%s 返回 %d", path, resp.StatusCode)
+	}
+	return nil
+}
+
 // preferredPort 与 `link` 写进 agent 配置的端口保持一致：
 // 桌面版若随机取端口，MCP 桥会连不上写死端口的那份配置。
 const preferredPort = 47123
 
 // startServe 以 `selfPath --serve --port 47123` 拉起自身作为 serve 子进程。
-// 固定端口而不是随机端口，是为了与 link 生成的 MCP 配置对齐。
-// 子进程不绑定父进程的 ctx：窗口关闭后它要继续为 agent 的 MCP 调用服务。
+// 固定端口是为了与 link 生成的 MCP 配置对齐；子进程不绑定父进程的 ctx，
+// 窗口关闭后它要继续为 agent 的 MCP 调用服务。
 // 调用方必须确认没有健康实例在运行：这里会删掉可能残留的 port 文件。
 func startServe(ctx context.Context, selfPath string, cfg config.Config) (*exec.Cmd, int, error) {
 	return startServeWith(ctx, cfg, serveStartTimeout, func(context.Context) (*exec.Cmd, error) {
@@ -179,7 +278,7 @@ func startServeWith(ctx context.Context, cfg config.Config, timeout time.Duratio
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return nil, 0, fmt.Errorf("create data dir: %w", err)
 	}
-	logPath := filepath.Join(cfg.DataDir, "app.log")
+	logPath := cfg.AppLogPath()
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return nil, 0, fmt.Errorf("open app.log: %w", err)
@@ -231,6 +330,38 @@ func terminateAndWait(cmd *exec.Cmd, done <-chan struct{}) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 	}
+}
+
+// openWindowOnce 打开一次窗口（阻塞到关闭），期间读写窗口位置。
+func openWindowOnce(link string, cfg config.Config, logger *log.Logger) {
+	var initial *windowState
+	if st, ok := loadWindowState(cfg.DataDir); ok {
+		sw, sh := screenSize()
+		st = clampWindowState(st, sw, sh, windowWidth, windowHeight)
+		initial = &st
+	}
+
+	if webview2Available() {
+		err := openWindow(link, initial, func(st windowState) {
+			if err := saveWindowState(cfg.DataDir, st); err != nil {
+				logger.Printf("保存窗口位置失败：%v", err)
+			}
+		})
+		if err == nil {
+			logger.Printf("窗口已关闭")
+			return
+		}
+		logger.Printf("WebView2 窗口打开失败：%v；改用浏览器 --app 模式", err)
+	} else {
+		logger.Printf("未检测到 WebView2 运行时；改用浏览器 --app 模式")
+	}
+
+	if err := openBrowserApp(link); err != nil {
+		logger.Printf("浏览器窗口打开失败：%v", err)
+		MessageBox("agent-memory", "打开窗口失败："+err.Error())
+		return
+	}
+	logger.Printf("浏览器窗口已关闭")
 }
 
 func buildURL(port int, token string) string {
@@ -320,7 +451,7 @@ func openAppLog(cfg config.Config, external *log.Logger) (*log.Logger, func(), e
 	if external != nil {
 		return external, func() {}, nil
 	}
-	path := filepath.Join(cfg.DataDir, "app.log")
+	path := cfg.AppLogPath()
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return nil, nil, err
 	}

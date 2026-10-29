@@ -1,5 +1,5 @@
-// agent-memory-app 是双击即用的桌面入口：正常启动会打开共享记忆窗口；
-// 带 --serve 时把同一个 exe 当作 serve 子进程（供 desktop 自己拉起）。
+// agent-memory-app 是双击即用的桌面入口：正常启动打开共享记忆窗口并驻留托盘；
+// 带 --serve 时把同一个 exe 当作 serve 子进程；带 --tray-only 时只驻留托盘。
 package main
 
 import (
@@ -13,11 +13,26 @@ import (
 )
 
 func main() {
-	// 同一个 exe 充当 serve 子进程：--serve 等价于 `serve` 子命令。
-	// cli.Run 只认识子命令名，所以把 --serve 换成 serve，其余参数原样转发。
-	if len(os.Args) > 1 && os.Args[1] == "--serve" {
-		args := append([]string{"serve"}, os.Args[2:]...)
-		os.Exit(cli.Run(args, os.Stdout, os.Stderr))
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "--serve":
+			args := append([]string{"serve"}, os.Args[2:]...)
+			os.Exit(cli.Run(args, os.Stdout, os.Stderr))
+		case "--install-shortcuts":
+			self, _ := os.Executable()
+			if err := desktop.InstallShortcuts(self); err != nil {
+				desktop.MessageBox("agent-memory", err.Error())
+				os.Exit(1)
+			}
+			desktop.MessageBox("agent-memory", "已创建桌面与开始菜单快捷方式。")
+			os.Exit(0)
+		case "--uninstall-shortcuts":
+			if err := desktop.UninstallShortcuts(); err != nil {
+				desktop.MessageBox("agent-memory", err.Error())
+				os.Exit(1)
+			}
+			os.Exit(0)
+		}
 	}
 
 	home, err := os.UserHomeDir()
@@ -34,7 +49,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := desktop.Run(ctx, desktop.Options{UserHome: home, SelfPath: self}); err != nil {
+	trayOnly := len(os.Args) > 1 && os.Args[1] == "--tray-only"
+	if err := desktop.Run(ctx, desktop.Options{UserHome: home, SelfPath: self, TrayOnly: trayOnly}); err != nil {
 		desktop.MessageBox("agent-memory", err.Error())
 		os.Exit(1)
 	}

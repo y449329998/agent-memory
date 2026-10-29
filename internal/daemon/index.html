@@ -201,6 +201,10 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     <details style="margin-top:8px"><summary>给 agent 的提示</summary>
       <p class="muted">接手前先读项目里的 .agent-memory/HANDOFF.md；新的约定用 MCP tool memory_add 写回共享库；细节用 memory_search 按需检索。</p>
     </details>
+    <details style="margin-top:8px"><summary>设置</summary>
+      <label class="muted"><input id="autostart" type="checkbox"> 开机时自动运行（在系统托盘常驻）</label>
+      <p id="autostart-hint" class="muted">登录后后台服务自动运行，agent 随时可用；需要先打开过一次桌面应用。</p>
+    </details>
   </footer>
 </main>
 
@@ -872,13 +876,39 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     });
   }
 
+  function loadAutostart() {
+    return api('/v1/desktop-settings').then(function (d) {
+      $('autostart').checked = !!d.autostart;
+    }).catch(function () { /* 未打开过桌面应用时后端仍会 200，这里只吞网络错误 */ });
+  }
+
+  function bindAutostart() {
+    $('autostart').addEventListener('change', function () {
+      var box = this;
+      var want = box.checked;
+      api('/v1/desktop-settings', { method: 'POST', body: JSON.stringify({ autostart: want }) })
+        .then(function () {
+          toast('info', want ? '已开启开机自动运行' : '已关闭开机自动运行');
+          $('autostart-hint').textContent = want
+            ? '已写入当前用户的启动项；下次登录后自动在托盘常驻。'
+            : '已从启动项移除。';
+        })
+        .catch(function (e) {
+          box.checked = !want;
+          toast('error', '设置失败：' + e.message);
+        });
+    });
+  }
+
   function init() {
     try { if ('scrollRestoration' in history) history.scrollRestoration = 'manual'; } catch (e) {}
     window.scrollTo(0, 0);
     bind();
+    bindAutostart();
     if (!state.token) { showNoToken(); return; }
     loadHealth();
     setInterval(loadHealth, 15000);
+    loadAutostart();
     refreshAll().then(function () { state.loaded = true; });
   }
   init();

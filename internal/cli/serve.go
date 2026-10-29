@@ -53,6 +53,9 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
 	adapters := buildAdapters(e.cfg)
 	scanOnce := newScanOnce(e.st, adapters, e.cfg, stdout)
 
@@ -62,6 +65,7 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		Port:         *port,
 		BudgetTokens: e.cfg.Handoff.BudgetTokens,
 		RecentCards:  e.cfg.Handoff.RecentCards,
+		Shutdown:     stop,
 		Scan: func(ctx context.Context) (map[string]any, error) {
 			res, err := scanOnce(ctx)
 			if err != nil {
@@ -70,9 +74,6 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 			return scanResult(res), nil
 		},
 	}, e.st)
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
 
 	if !*noWatch && len(adapters) > 0 {
 		go scanLoop(ctx, scanOnce, adapters, *debounce, resolvePollSeconds(*pollFlag, e.cfg.Scan.Interval), stdout)
