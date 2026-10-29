@@ -335,3 +335,52 @@ func (s *Store) CountSources(ctx context.Context, agent string, failedOnly bool)
 	err := s.db.QueryRowContext(ctx, q, args...).Scan(&n)
 	return n, err
 }
+
+// ListProjectSources 列出给该项目贡献过记忆的源文件（含已过时记忆贡献的源），
+// 按最后扫描倒序。total 是去重后的源数，failed 是其中解析失败的数量。
+func (s *Store) ListProjectSources(ctx context.Context, projectID int64, limit int) ([]SourceRow, int, int, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	const from = `
+FROM source s
+JOIN memory_source ms ON ms.agent = s.agent AND ms.path = s.path
+JOIN memory_item m ON m.id = ms.memory_id
+WHERE m.project_id = ?`
+
+	var total, failed int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT s.id)`+from, projectID).Scan(&total); err != nil {
+		return nil, 0, 0, err
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT s.id)`+from+` AND s.last_error <> ''`, projectID).Scan(&failed); err != nil {
+		return nil, 0, 0, err
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+SELECT DISTINCT s.agent, s.kind, s.path, s.content_hash, s.last_error, s.last_seen_run, s.updated_at, s.changed_at, s.size`+from+`
+ORDER BY s.last_seen_run DESC, s.updated_at DESC, s.agent, s.path
+LIMIT ?`, projectID, limit)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	defer rows.Close()
+
+	var out []SourceRow
+	for rows.Next() {
+		var (
+			r       SourceRow
+			updated int64
+			changed int64
+		)
+		if err := rows.Scan(&r.Agent, &r.Kind, &r.Path, &r.ContentHash, &r.LastError,
+			&r.LastSeenRun, &updated, &changed, &r.Size); err != nil {
+			return nil, 0, 0, err
+		}
+		r.UpdatedAt = time.Unix(updated, 0)
+		if changed > 0 {
+			r.ChangedAt = time.Unix(changed, 0)
+		}
+		out = append(out, r)
+	}
+	return out, total, failed, rows.Err()
+}
