@@ -11,6 +11,8 @@ var (
 	ErrMemoryNotFound = errors.New("memory not found")
 	// ErrEmptyMemory 拒绝把空白内容写成记忆条目。
 	ErrEmptyMemory = errors.New("memory text is empty")
+	// ErrInvalidMemoryType 拒绝不在枚举内的记忆类型。
+	ErrInvalidMemoryType = errors.New("invalid memory type")
 	// ErrTaskCardNotFound 表示按 id 取任务卡时目标不存在。
 	ErrTaskCardNotFound = errors.New("task card not found")
 )

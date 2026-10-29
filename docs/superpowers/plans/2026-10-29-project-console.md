@@ -30,7 +30,7 @@
 ## 文件结构
 
 ```
-internal/domain/errors.go          + ErrInvalidMemoryType
+internal/domain/types.go          + ErrInvalidMemoryType
 internal/store/memory.go           + UpdateMemory；MemoryFilter.Offset
 internal/store/memory_update_test.go（新建）
 internal/store/memory_list_test.go（新建）
@@ -52,7 +52,7 @@ docs/usage.md                      Web UI 章节更新
 ## Task 1: 记忆更新（store + domain）
 
 **Files:**
-- Modify: `internal/domain/errors.go`
+- Modify: `internal/domain/types.go`
 - Modify: `internal/store/memory.go`
 - Create: `internal/store/memory_update_test.go`
 
@@ -170,7 +170,7 @@ Expected: FAIL（`UpdateMemory`、`ErrInvalidMemoryType` 未定义）
 
 - [ ] **Step 3: 加 domain 错误**
 
-`internal/domain/errors.go` 追加：
+`internal/domain/types.go` 追加：
 
 ```go
 // ErrInvalidMemoryType 拒绝不在枚举内的记忆类型。
@@ -259,7 +259,7 @@ Expected: PASS（3 个用例）
 - [ ] **Step 6: 提交**
 
 ```bash
-git add internal/domain/errors.go internal/store/memory.go internal/store/memory_update_test.go
+git add internal/domain/types.go internal/store/memory.go internal/store/memory_update_test.go
 git commit -m "feat: 记忆正文与类型可编辑，冲突时合并来源"
 ```
 

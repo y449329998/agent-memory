@@ -122,6 +122,74 @@ func truncate(s string, n int) string {
 	return string(r[:n]) + "…"
 }
 
+// UpdateMemory 编辑已有条目的正文与类型。若改后与同范围/项目/类型下的
+// 另一条内容完全相同，则把来源并入那条、把本条标过时，并返回被合并的 id；
+// 否则原地更新并重建 FTS。范围、所属项目、首次发现时间和过时状态都不变。
+func (s *Store) UpdateMemory(ctx context.Context, id int64, text string, typ domain.MemoryType, at time.Time) (int64, error) {
+	old, err := s.MemoryByID(ctx, id)
+	if err != nil {
+		return 0, err
+	}
+	canon := normalize.CanonicalText(text)
+	if canon == "" {
+		return 0, domain.ErrEmptyMemory
+	}
+	display := normalize.DisplayText(text)
+	hash := normalize.Hash(canon)
+	if typ == "" {
+		typ = old.Type
+	}
+	if !domain.ValidMemoryType(typ) {
+		return 0, domain.ErrInvalidMemoryType
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	var other int64
+	err = tx.QueryRowContext(ctx, `
+SELECT id FROM memory_item
+WHERE scope = ? AND project_id = ? AND type = ? AND text_norm_hash = ? AND id <> ?
+LIMIT 1`, old.Scope, old.ProjectID, typ, hash, id).Scan(&other)
+	switch {
+	case err == nil:
+		if _, err := tx.ExecContext(ctx, `
+INSERT OR IGNORE INTO memory_source(memory_id, agent, path, quote)
+SELECT ?, agent, path, quote FROM memory_source WHERE memory_id = ?`, other, id); err != nil {
+			return 0, fmt.Errorf("merge memory sources: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE memory_item SET stale = 1, last_seen_at = ? WHERE id = ?`, at.Unix(), id); err != nil {
+			return 0, fmt.Errorf("stale merged memory: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return 0, err
+		}
+		return other, nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return 0, err
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+UPDATE memory_item SET type = ?, text = ?, text_norm_hash = ?, last_seen_at = ? WHERE id = ?`,
+		typ, display, hash, at.Unix(), id); err != nil {
+		return 0, fmt.Errorf("update memory: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM memory_fts WHERE rowid = ?`, id); err != nil {
+		return 0, fmt.Errorf("reindex memory %d: %w", id, err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO memory_fts(rowid, text_seg) VALUES(?, ?)`,
+		id, strings.Join(normalize.Segment(canon), " ")); err != nil {
+		return 0, fmt.Errorf("reindex memory %d: %w", id, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return 0, nil
+}
+
 func (s *Store) MemoryByID(ctx context.Context, id int64) (domain.MemoryItem, error) {
 	var (
 		m           domain.MemoryItem
