@@ -53,6 +53,7 @@ func New(cfg Config, st *store.Store) *Server {
 	s.mux.HandleFunc("GET /v1/stats", s.auth(s.handleStats))
 	s.mux.HandleFunc("GET /v1/projects", s.auth(s.handleListProjects))
 	s.mux.HandleFunc("GET /v1/sources", s.auth(s.handleListSources))
+	s.mux.HandleFunc("GET /v1/sessions", s.auth(s.handleListSessions))
 	s.mux.HandleFunc("POST /v1/search", s.auth(s.handleSearch))
 	s.mux.HandleFunc("POST /v1/memory", s.auth(s.handleAddMemory))
 	s.mux.HandleFunc("GET /v1/memory", s.auth(s.handleListMemory))

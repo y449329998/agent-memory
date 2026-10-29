@@ -248,6 +248,42 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"sources": rows, "count": len(rows), "total": total, "failed": failed})
 }
 
+// handleListSessions 列出项目的最近会话；只读，不返回完整对话。
+func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	ref := r.URL.Query().Get("project_path")
+	if ref == "" {
+		ref = r.URL.Query().Get("project_key")
+	}
+	if ref == "" {
+		http.Error(w, "project_key is required", http.StatusBadRequest)
+		return
+	}
+	id, err := s.projectIDFromRequest(r.Context(), ref, ref)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	limit := 20
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+	sessions, err := s.st.ListSessions(r.Context(), id, limit)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	out := make([]map[string]any, 0, len(sessions))
+	for _, sess := range sessions {
+		out = append(out, map[string]any{
+			"agent": sess.Agent, "external_id": sess.ExternalID, "title": sess.Title,
+			"updated_at": sess.UpdatedAt.Format(time.RFC3339), "event_count": sess.EventCount,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sessions": out, "count": len(out)})
+}
+
 // handleShutdown 受理托盘「停止服务并退出」：先应答再异步取消服务上下文。
 func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
