@@ -20,14 +20,15 @@
 html,body{margin:0;background:var(--bg);color:var(--text)}
 body{font:15px/1.55 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
 button,input,select,textarea{font:inherit;color:inherit}
+a{color:inherit}
 main{max-width:1040px;margin:0 auto;padding:20px 20px 56px;display:grid;gap:20px}
 main>*{min-width:0}
 .topbar{position:sticky;top:0;z-index:20;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;
   padding:12px 20px;backdrop-filter:blur(8px);background:color-mix(in srgb,var(--bg) 82%,transparent);border-bottom:1px solid var(--line)}
-.brand{font-weight:600;display:flex;align-items:center;gap:8px;white-space:nowrap}
+.brand{font-weight:600;display:flex;align-items:center;gap:8px;white-space:nowrap;text-decoration:none}
+.brand-status{display:flex;align-items:center;gap:8px}
 .actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 select,input,textarea{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 10px;max-width:100%}
-#project-select{max-width:min(46vw,420px)}
 textarea{width:100%;resize:vertical}
 button{cursor:pointer;border:1px solid var(--line);background:var(--card);border-radius:10px;padding:8px 14px;
   transition:transform .16s ease,box-shadow .16s ease,background .16s ease}
@@ -57,13 +58,11 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px}
 .card h2{font-size:15px;margin:0 0 12px}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
-.grid>*{min-width:0}
 .item-text,.mono{overflow-wrap:anywhere}
-@media (max-width:880px){.grid{grid-template-columns:1fr}.stat-band{grid-template-columns:1fr 1fr}
+@media (max-width:880px){.stat-band{grid-template-columns:1fr 1fr}
   .stat:nth-child(2n){border-right:0}.stat:nth-child(n+3){border-top:1px solid var(--line)}
   .topbar{padding:10px 14px}main{padding:14px}
-  .actions{width:100%}#project-select{flex:1;min-width:0;max-width:none}
+  .actions{width:100%}
   .stat .num{font-size:22px}.stat{padding:12px 14px}}
 .list{list-style:none;margin:12px 0 0;padding:0;display:grid;gap:10px}
 .item{border:1px solid var(--line);border-radius:10px;padding:12px 14px;min-height:44px;background:var(--card)}
@@ -87,6 +86,7 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
 .preview{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:14px;
   max-height:420px;overflow:auto;font-size:13px;margin:12px 0 0}
 .foot details summary{cursor:pointer;color:var(--muted);font-size:13px}
+.foot{max-width:1040px;margin:0 auto;padding:0 20px 32px;color:var(--muted);font-size:13px}
 .backdrop{position:fixed;inset:0;background:rgba(0,0,0,.35);opacity:0;transition:opacity .15s ease;z-index:30}
 .backdrop.open{opacity:1}
 .drawer{position:fixed;top:0;right:0;height:100%;width:min(560px,92vw);background:var(--card);
@@ -113,118 +113,190 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
   *{animation:none!important;transition:none!important}
   .reveal{opacity:1;transform:none}
 }
+.project-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
+.project-card{display:flex;flex-direction:column;gap:6px;text-align:left;padding:14px 16px;background:var(--card);
+  border:1px solid var(--line);border-radius:var(--radius);cursor:pointer}
+.project-card:hover{background:var(--accent-weak);transform:none;box-shadow:var(--shadow)}
+.project-card .name{font-weight:600}
+.project-card .path{color:var(--muted);font-size:12px;word-break:break-all}
+.project-card .meta{display:flex;gap:8px;flex-wrap:wrap;color:var(--muted);font-size:12px}
+.project-card.bad{border-color:var(--danger)}
+.section-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.section-head h2{margin:0}
+.filters{margin:0 0 8px}
+.item-click{cursor:pointer}
+.item-click:hover{border-color:var(--accent)}
+.item-click:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.anchor-nav{position:sticky;top:56px;z-index:10;display:flex;gap:6px;overflow:auto;padding:6px 0;
+  background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(6px)}
+.anchor-nav button{border:0;background:none;color:var(--muted);padding:6px 10px;border-radius:8px;white-space:nowrap}
+.anchor-nav button:hover{background:var(--accent-weak);color:var(--text);transform:none;box-shadow:none}
+.project-head{display:flex;gap:12px;align-items:flex-start;margin:4px 0 8px}
+.project-title-box h1{font-size:20px;margin:0}
+.overview-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}
+.overview-grid .label{display:block;color:var(--muted);font-size:12px}
+.overview-grid .num-sm{font-size:20px;font-weight:600}
+.notice{border-left:3px solid var(--danger);padding:8px 10px;background:var(--card);color:var(--text);font-size:13px}
+.add-box{margin-top:12px}
+.add-box summary{cursor:pointer;color:var(--muted)}
+.add-inline{margin:8px 0}
+.edit-body .field{display:block;margin-bottom:12px}
+.edit-body .field span{display:block;color:var(--muted);font-size:13px;margin-bottom:4px}
+.edit-body textarea{width:100%}
+@media (max-width:880px){.project-head{flex-direction:column}.anchor-nav{top:0}}
 </style>
 </head>
 <body>
 <header class="topbar">
-  <div class="brand">agent-memory <span id="health-dot" class="dot"></span><span id="health-text" class="muted">检查中</span></div>
+  <a class="brand" href="#/">agent-memory</a>
+  <span class="brand-status"><span id="health-dot" class="dot"></span><span id="health-text" class="muted">检查中</span></span>
   <div class="actions">
-    <label class="sr-only" for="project-select">项目</label>
-    <select id="project-select"><option value="">全部 / 用户级</option></select>
     <button id="refresh-btn" class="ghost">刷新</button>
     <button id="sync-btn" class="primary">立即同步</button>
   </div>
 </header>
 
-<main>
-  <section id="stat-band" class="stat-band reveal" style="--i:0">
-    <button class="stat" data-drawer="projects" aria-label="查看项目明细"><span id="stat-projects" class="num">0</span><span class="label">项目</span></button>
-    <button class="stat" data-drawer="memories" aria-label="查看记忆明细"><span id="stat-memories" class="num">0</span><span class="label">记忆</span></button>
-    <button class="stat" data-drawer="stale" aria-label="查看过时记忆"><span id="stat-stale" class="num">0</span><span class="label">过时</span></button>
-    <button class="stat" data-drawer="sources" aria-label="查看来源文件"><span id="stat-sources" class="num">0</span><span class="label">源</span></button>
-    <button class="stat" data-drawer="failed" aria-label="查看失败来源"><span id="stat-failed" class="num">0</span><span class="label">失败源</span></button>
-  </section>
-  <p id="sources-line" class="sources-line reveal" style="--i:1">记忆来源：—</p>
-
-  <section class="card reveal" style="--i:2">
-    <h2>搜索记忆</h2>
-    <form id="search-form" class="row">
-      <input id="search-input" type="search" placeholder="搜索记忆，例如：部署、约束" autocomplete="off" style="flex:1;min-width:220px">
-      <select id="search-type" aria-label="类型">
-        <option value="">全部类型</option>
-        <option value="preference">偏好</option>
-        <option value="constraint">约束</option>
-        <option value="convention">约定</option>
-        <option value="lesson">教训</option>
-        <option value="fact">事实</option>
-        <option value="goal">目标</option>
-      </select>
-      <label class="muted"><input id="search-stale" type="checkbox"> 包含过时</label>
-      <button id="search-btn" class="primary" type="submit">搜索</button>
-    </form>
-    <p id="search-status" class="muted">未选择项目时只搜索用户级记忆。</p>
-    <ul id="search-results" class="list"></ul>
-  </section>
-
-  <div class="grid">
-    <section class="card reveal" style="--i:3">
-      <h2>任务卡</h2>
-      <p id="task-status" class="muted">选择具体项目后显示任务卡。</p>
-      <ul id="task-list" class="list"></ul>
+<main id="app">
+  <section id="home-view">
+    <section id="stat-band" class="stat-band">
+      <button class="stat" data-drawer="projects" aria-label="查看项目明细"><span id="stat-projects" class="num">0</span><span class="label">项目</span></button>
+      <button class="stat" data-drawer="memories" aria-label="查看记忆明细"><span id="stat-memories" class="num">0</span><span class="label">记忆</span></button>
+      <button class="stat" data-drawer="stale" aria-label="查看过时记忆"><span id="stat-stale" class="num">0</span><span class="label">过时</span></button>
+      <button class="stat" data-drawer="sources" aria-label="查看来源文件"><span id="stat-sources" class="num">0</span><span class="label">源</span></button>
+      <button class="stat" data-drawer="failed" aria-label="查看失败来源"><span id="stat-failed" class="num">0</span><span class="label">失败源</span></button>
     </section>
-    <section class="card reveal" style="--i:4">
-      <h2>新增记忆</h2>
-      <form id="add-form">
-        <label class="sr-only" for="add-text">记忆内容</label>
-        <textarea id="add-text" rows="5" placeholder="写一条可复用的偏好、约束或事实…"></textarea>
-        <div class="row" style="margin-top:10px">
-          <select id="add-type" aria-label="类型">
-            <option value="fact">事实</option>
-            <option value="preference">偏好</option>
-            <option value="constraint">约束</option>
-            <option value="convention">约定</option>
-            <option value="lesson">教训</option>
-            <option value="goal">目标</option>
-          </select>
-          <select id="add-scope" aria-label="范围">
-            <option value="user">用户级</option>
-            <option value="project">项目级</option>
-          </select>
-          <button id="add-btn" class="primary" type="submit">保存</button>
-        </div>
-      </form>
-      <p id="add-hint" class="muted">用户级记忆对所有项目生效。</p>
-    </section>
-  </div>
+    <p id="sources-line" class="sources-line">记忆来源：—</p>
 
-  <section class="card reveal" style="--i:5">
-    <h2>交接简报</h2>
-    <div class="row">
-      <button id="handoff-preview" class="ghost">预览</button>
-      <button id="handoff-write" class="primary">生成交接简报</button>
-      <span id="handoff-meta" class="muted">选择具体项目后可预览简报。</span>
+    <section class="card">
+      <div class="section-head"><h2>项目</h2><span id="project-count" class="muted"></span></div>
+      <div id="project-grid" class="project-grid"></div>
+      <p id="project-empty" class="muted" hidden>还没有项目，扫描后会自动出现。</p>
+    </section>
+
+    <section class="card">
+      <div class="section-head"><h2>用户级记忆</h2><span id="home-user-total" class="muted"></span></div>
+      <div class="row filters">
+        <input id="home-user-search" type="search" placeholder="在用户级记忆里搜索" autocomplete="off" style="flex:1;min-width:200px">
+        <select id="home-user-type" aria-label="类型"></select>
+        <label class="muted"><input id="home-user-stale" type="checkbox"> 包含过时</label>
+      </div>
+      <ul id="home-user-list" class="list"></ul>
+      <button id="home-user-more" class="ghost small" hidden>显示更多</button>
+      <details class="add-box">
+        <summary>新增用户级记忆</summary>
+        <form id="home-add-form">
+          <textarea id="home-add-text" rows="4" placeholder="写一条对所有项目生效的偏好、约束或事实…"></textarea>
+          <div class="row"><select id="home-add-type" aria-label="类型"></select><button class="primary" type="submit">保存</button></div>
+        </form>
+      </details>
+    </section>
+  </section>
+
+  <section id="project-view" hidden>
+    <div class="project-head">
+      <button id="back-btn" class="ghost">← 返回</button>
+      <div class="project-title-box"><h1 id="project-title"></h1><p id="project-path" class="mono"></p></div>
     </div>
-    <pre id="handoff-body" class="preview">无</pre>
-  </section>
+    <nav id="project-nav" class="anchor-nav" aria-label="项目页导航">
+      <button data-scroll="sec-overview">概要</button>
+      <button data-scroll="sec-project-memory">项目记忆</button>
+      <button data-scroll="sec-user-memory">用户记忆</button>
+      <button data-scroll="sec-tasks">任务</button>
+      <button data-scroll="sec-handoff">简报</button>
+      <button data-scroll="sec-sources">来源</button>
+      <button data-scroll="sec-sessions">会话</button>
+    </nav>
 
-  <footer class="foot reveal" style="--i:6">
-    <details><summary>项目标识与文件位置</summary>
-      <p id="footer-target" class="mono">未选择项目</p>
-    </details>
-    <details style="margin-top:8px"><summary>给 agent 的提示</summary>
-      <p class="muted">接手前先读项目里的 .agent-memory/HANDOFF.md；新的约定用 MCP tool memory_add 写回共享库；细节用 memory_search 按需检索。</p>
-    </details>
-    <details style="margin-top:8px"><summary>设置</summary>
-      <label class="muted"><input id="autostart" type="checkbox"> 开机时自动运行（在系统托盘常驻）</label>
-      <p id="autostart-hint" class="muted">登录后后台服务自动运行，agent 随时可用；需要先打开过一次桌面应用。</p>
-    </details>
-  </footer>
+    <section id="sec-overview" class="card">
+      <h2>项目概况</h2>
+      <div class="overview-grid">
+        <div><span class="label">路径</span><span id="ov-path" class="mono"></span></div>
+        <div><span class="label">项目记忆</span><span id="ov-mem" class="num-sm">0</span></div>
+        <div><span class="label">用户级记忆</span><span id="ov-user-mem" class="num-sm">0</span></div>
+        <div><span class="label">任务卡</span><span id="ov-tasks" class="num-sm">0</span></div>
+        <div><span class="label">最后活动</span><span id="ov-last"></span></div>
+        <div><span class="label">来源</span><span id="ov-sources"></span></div>
+        <div><span class="label">记忆来源</span><span id="ov-agents"></span></div>
+      </div>
+      <p id="ov-warning" class="notice" hidden></p>
+    </section>
+
+    <section id="sec-project-memory" class="card">
+      <div class="section-head"><h2>项目记忆</h2><span id="project-mem-total" class="muted"></span>
+        <button id="project-add-toggle" class="small primary">新增项目记忆</button></div>
+      <div class="row filters">
+        <input id="project-mem-search" type="search" placeholder="在项目记忆里搜索" autocomplete="off" style="flex:1;min-width:180px">
+        <select id="project-mem-type" aria-label="类型"></select>
+        <label class="muted"><input id="project-mem-stale" type="checkbox"> 包含过时</label>
+      </div>
+      <form id="project-add-form" class="add-inline" hidden>
+        <textarea id="project-add-text" rows="3" placeholder="写一条只属于这个项目的记忆…"></textarea>
+        <div class="row"><select id="project-add-type" aria-label="类型"></select><button class="primary" type="submit">保存</button></div>
+      </form>
+      <ul id="project-mem-list" class="list"></ul>
+      <button id="project-mem-more" class="ghost small" hidden>显示更多</button>
+    </section>
+
+    <section id="sec-user-memory" class="card">
+      <div class="section-head"><h2>用户级记忆</h2><span class="muted">对所有项目生效</span><span id="project-user-total" class="muted"></span></div>
+      <div class="row filters">
+        <input id="project-user-search" type="search" placeholder="在用户级记忆里搜索" autocomplete="off" style="flex:1;min-width:180px">
+        <select id="project-user-type" aria-label="类型"></select>
+        <label class="muted"><input id="project-user-stale" type="checkbox"> 包含过时</label>
+      </div>
+      <ul id="project-user-list" class="list"></ul>
+      <button id="project-user-more" class="ghost small" hidden>显示更多</button>
+    </section>
+
+    <section id="sec-tasks" class="card"><h2>任务卡</h2><p id="task-status" class="muted"></p><ul id="task-list" class="list"></ul></section>
+
+    <section id="sec-handoff" class="card">
+      <h2>交接简报</h2>
+      <div class="row"><button id="handoff-preview" class="ghost">预览</button><button id="handoff-write" class="primary">生成交接简报</button><span id="handoff-meta" class="muted"></span></div>
+      <pre id="handoff-body" class="preview">无</pre>
+    </section>
+
+    <section id="sec-sources" class="card">
+      <div class="section-head"><h2>来源与扫描</h2><span id="source-summary" class="muted"></span><button id="source-sync" class="small ghost">立即同步</button></div>
+      <ul id="source-list" class="list"></ul>
+    </section>
+
+    <section id="sec-sessions" class="card"><h2>最近会话</h2><ul id="session-list" class="list"></ul><p id="session-empty" class="muted" hidden>目前只有 Qoder 会话会被导入；Trae / WorkBuddy 没有本地会话正文。</p></section>
+  </section>
 </main>
 
 <div id="drawer-backdrop" class="backdrop" hidden></div>
 <aside id="drawer" class="drawer" hidden role="dialog" aria-modal="true" aria-labelledby="drawer-title">
-  <header><h2 id="drawer-title">明细</h2><button id="drawer-close" class="ghost" aria-label="关闭明细">关闭</button></header>
+  <header><h2 id="drawer-title">明细</h2><button id="drawer-close" class="ghost">关闭</button></header>
   <div id="drawer-filters" class="filters"></div>
   <div id="drawer-body" class="drawer-body"></div>
 </aside>
+
+<div id="edit-backdrop" class="backdrop" hidden></div>
+<aside id="edit-drawer" class="drawer" hidden role="dialog" aria-modal="true" aria-labelledby="edit-title">
+  <header><h2 id="edit-title">编辑记忆</h2><button id="edit-close" class="ghost">关闭</button></header>
+  <div class="drawer-body edit-body">
+    <label class="field"><span>正文</span><textarea id="memory-text" rows="8"></textarea></label>
+    <label class="field"><span>类型</span><select id="memory-type" aria-label="类型"></select></label>
+    <p id="memory-meta" class="muted"></p>
+    <p id="memory-warning" class="notice" hidden></p>
+    <div class="row"><button id="memory-save" class="primary">保存</button><button id="memory-cancel" class="ghost">取消</button><button id="memory-stale" class="ghost">不再使用</button></div>
+  </div>
+</aside>
+
 <div id="toasts" class="toasts" aria-live="polite"></div>
+<footer class="foot">
+  <details><summary>设置</summary>
+    <label class="muted"><input id="autostart" type="checkbox"> 开机时自动运行（在系统托盘常驻）</label>
+    <p id="autostart-hint" class="muted">登录后后台服务自动运行，agent 随时可用；需要先打开过一次桌面应用。</p>
+  </details>
+</footer>
 
 <script>
 (function () {
   'use strict';
 
   var TOKEN_KEY = 'agent-memory-token';
-  var PROJECT_KEY = 'am-project';
   var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   var TYPE_LABEL = {
@@ -236,17 +308,17 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
   var state = {
     token: readToken(),
     projects: [],
-    selectedKey: '',
-    selected: null,
     stats: null,
-    tasks: [],
-    taskPresence: {},
-    handoff: '',
+    view: 'home',
+    project: null,
+    userHome: null,
+    projectMem: null,
+    projectUser: null,
+    edit: null,
+    editOriginal: null,
     drawer: null,
-    drawerData: null,
     drawerFilter: { stale: 'all', type: '' },
-    healthBusy: false,
-    loaded: false
+    healthBusy: false
   };
 
   function $(id) { return document.getElementById(id); }
@@ -348,266 +420,83 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     $('sources-line').textContent = parts.length ? '记忆来源：' + parts.join(' · ') : '记忆来源：暂无（先点「立即同步」）';
   }
 
-  function projectRef(p) { return p.primary_path || p.key; }
-  function projectLabel(p) { return p.display_name || p.key; }
+  function projectLabel(p) { return (p && (p.display_name || p.key)) || '—'; }
+  function findProject(key) { return state.projects.filter(function (p) { return p.key === key; })[0] || null; }
 
   function loadProjects() {
     return api('/v1/projects').then(function (data) {
       state.projects = (data.projects || []).filter(function (p) { return p && p.key; });
-      var select = $('project-select');
-      var keep = state.selectedKey;
-      clear(select);
-      var all = el('option', '', '全部 / 用户级'); all.value = ''; select.appendChild(all);
-      state.projects.forEach(function (p) {
-        var suffix = '';
-        if (!p.path_exists) suffix = '（路径不存在）';
-        else if (state.taskPresence[p.key] === 0) suffix = '（仅记忆）';
-        var opt = el('option', '', projectLabel(p) + suffix);
-        opt.value = p.key;
-        opt.title = (p.primary_path || '') + ' · 记忆 ' + (p.memory_count || 0);
-        select.appendChild(opt);
-      });
-      var stored = '';
-      try { stored = localStorage.getItem(PROJECT_KEY) || ''; } catch (e) {}
-      var want = keep || stored;
-      var hasExisting = state.projects.some(function (p) { return p.path_exists; });
-      var candidate = state.projects.filter(function (p) { return p.key === want; })[0];
-      // 记住的项目如果路径已不存在，而库里还有可用项目，就不要自动跳回去。
-      var valid = candidate && (candidate.path_exists || !hasExisting);
-      if (!valid) {
-        var best = null;
-        state.projects.forEach(function (p) {
-          if (!p.path_exists) return;
-          if (!p.last_memory_at) return;
-          if (!best || p.last_memory_at > best.last_memory_at) best = p;
-        });
-        if (!best) {
-          state.projects.forEach(function (p) {
-            if (!p.path_exists) return;
-            if (!best) best = p;
-          });
-        }
-        want = best ? best.key : (state.projects[0] ? state.projects[0].key : '');
-      }
-      select.value = want;
-      applySelection();
-      return ensureTaskPresence();
     });
-  }
-
-  // 给「仅记忆」标注提供每个项目是否有任务卡；项目数不多，逐个 limit=1 查询。
-  function ensureTaskPresence() {
-    var todo = state.projects.filter(function (p) { return state.taskPresence[p.key] === undefined; });
-    if (!todo.length) return Promise.resolve();
-    return Promise.all(todo.map(function (p) {
-      return api('/v1/task?project_key=' + encodeURIComponent(p.key) + '&limit=1')
-        .then(function (d) { state.taskPresence[p.key] = (d.count || 0) > 0 ? 1 : 0; })
-        .catch(function () { state.taskPresence[p.key] = 0; });
-    })).then(refreshProjectLabels);
-  }
-  function refreshProjectLabels() {
-    var select = $('project-select');
-    Array.prototype.forEach.call(select.options, function (opt) {
-      if (!opt.value) return;
-      var p = state.projects.filter(function (x) { return x.key === opt.value; })[0];
-      if (!p) return;
-      opt.textContent = projectLabel(p) + (!p.path_exists ? '（路径不存在）' : (state.taskPresence[p.key] === 0 ? '（仅记忆）' : ''));
-    });
-  }
-
-  function applySelection() {
-    var key = $('project-select').value;
-    state.selectedKey = key;
-    state.selected = state.projects.filter(function (p) { return p.key === key; })[0] || null;
-    try { localStorage.setItem(PROJECT_KEY, key); } catch (e) {}
-    updateAddHint();
-    updateHandoffControls();
-    updateFooter();
-  }
-
-  function updateAddHint() {
-    var hint = $('add-hint'), scope = $('add-scope').value;
-    hint.classList.remove('muted');
-    if (scope === 'user') { hint.textContent = '用户级记忆对所有项目生效。'; return; }
-    if (!state.selected) { hint.textContent = '项目级记忆需要先在顶栏选择具体项目。'; return; }
-    if (!state.selected.primary_path) { hint.textContent = '该项目未登记路径，无法新增项目级记忆。'; return; }
-    hint.textContent = '将写入项目：' + projectLabel(state.selected);
-  }
-  function updateHandoffControls() {
-    var writable = state.selected && state.selected.primary_path && state.selected.path_exists;
-    $('handoff-preview').disabled = !state.selected;
-    $('handoff-write').disabled = !writable;
-  }
-  function updateFooter() {
-    $('footer-target').textContent = state.selected
-      ? (state.selected.key + '\n' + (state.selected.primary_path || '（未登记路径）'))
-      : '未选择项目';
   }
 
   function loadStats() { return api('/v1/stats').then(setStats); }
 
-  function loadTasks() {
-    var list = $('task-list'), status = $('task-status');
-    clear(list);
-    if (!state.selected) {
-      status.textContent = '选择具体项目后显示任务卡。';
-      list.appendChild(el('li', 'muted', '—'));
-      return Promise.resolve();
-    }
-    status.textContent = '加载中…';
-    return api('/v1/task?project_key=' + encodeURIComponent(state.selected.key) + '&limit=10')
-      .then(function (d) {
-        state.tasks = d.cards || [];
-        state.taskPresence[state.selected.key] = state.tasks.length ? 1 : 0;
-        clear(list);
-        if (!state.tasks.length) {
-          status.textContent = '这个项目还没有任务卡。';
-          list.appendChild(el('li', 'muted',
-            'Qoder 的会话会提炼成任务卡；Trae / WorkBuddy 目前只同步记忆，不带任务。'));
-          return;
-        }
-        status.textContent = '共 ' + state.tasks.length + ' 张';
-        state.tasks.forEach(function (c) { list.appendChild(renderTask(c)); });
-      }, function (e) {
-        status.textContent = '加载失败';
-        throw e;
-      });
-  }
-  function renderTask(c) {
-    var li = el('li', 'item');
-    var head = el('div', 'item-head');
-    head.appendChild(el('strong', '', c.Goal || '（无目标）'));
-    head.appendChild(statusBadge(c.Status));
-    li.appendChild(head);
-    li.appendChild(el('div', 'item-meta', '最近活动：' + fmtTime(c.UpdatedAt)));
-    if (c.NextSteps) {
-      var next = el('p', 'item-text');
-      next.appendChild(el('span', 'muted', '下一步：'));
-      next.appendChild(document.createTextNode(c.NextSteps));
-      li.appendChild(next);
-    }
-    var files = c.Files || [];
-    if (files.length) {
-      var det = el('details');
-      det.appendChild(el('summary', 'muted', '改动文件（' + files.length + '）'));
-      var ul = el('ul', 'list');
-      files.forEach(function (f) { ul.appendChild(el('li', 'faint mono', f)); });
-      det.appendChild(ul);
-      li.appendChild(det);
-    }
-    return li;
+  function renderOverview(p) {
+    $('ov-path').textContent = p.primary_path || '（未登记路径）';
+    $('ov-mem').textContent = p.memory_count || 0;
+    $('ov-tasks').textContent = p.task_count || 0;
+    $('ov-last').textContent = p.last_memory_at ? fmtTime(p.last_memory_at) : '—';
+    $('ov-warning').hidden = p.path_exists !== false;
+    if (p.path_exists === false) $('ov-warning').textContent = '项目路径不存在：项目级写入与生成简报已禁用。';
   }
 
-  function loadHandoff() {
-    if (!state.selected) {
-      state.handoff = '';
-      $('handoff-body').textContent = '无';
-      $('handoff-meta').textContent = '选择具体项目后可预览简报。';
-      return Promise.resolve();
-    }
-    $('handoff-meta').textContent = '加载中…';
-    return api('/v1/handoff?project_key=' + encodeURIComponent(state.selected.key) + '&format=json')
-      .then(function (d) {
-        state.handoff = d.body || '';
-        $('handoff-body').textContent = state.handoff || '无';
-        $('handoff-meta').textContent = '约 ' + (state.handoff.length || 0) + ' 字'
-          + (d.truncated ? ' · 已按预算精简' : '');
-      }, function (e) {
-        $('handoff-meta').textContent = '加载失败';
-        throw e;
-      });
+  // Task 11 替换为完整版本
+  function refreshHome() {
+    return Promise.all([loadStats().catch(function () {}), loadProjects()]);
+  }
+  function refreshCurrent() {
+    return state.view === 'project' ? Promise.resolve() : refreshHome();
+  }
+  function refreshLive() {
+    if (document.hidden || state.edit || state.drawer) return Promise.resolve();
+    var active = document.activeElement;
+    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) return Promise.resolve();
+    return refreshCurrent();
   }
 
-  function search() {
-    var q = $('search-input').value.trim();
-    if (!q) { $('search-status').textContent = '请输入关键词。'; return Promise.resolve(); }
-    $('search-status').textContent = '搜索中…';
-    var body = { query: q, limit: 30 };
-    if (state.selected) body.project_key = state.selected.key;
-    var t = $('search-type').value;
-    if (t) body.type = t;
-    var stale = $('search-stale').checked;
-    body.include_stale = stale;
-    return api('/v1/search', { method: 'POST', body: JSON.stringify(body) })
-      .then(function (d) {
-        var hits = d.hits || [];
-        renderHits(hits);
-        $('search-status').textContent = hits.length ? '共 ' + hits.length + ' 条' : '没有找到匹配的记忆。';
-      }, function (e) {
-        $('search-status').textContent = '搜索失败';
-        throw e;
-      });
+  function route() {
+    var hash = location.hash || '#/';
+    var m = /^#\/p\/(.+)$/.exec(hash);
+    if (!m) { showHome(); return; }
+    var key = decodeURIComponent(m[1]);
+    var p = findProject(key);
+    if (!p) {
+      if (!state.projects.length) { loadProjects().then(route); return; }
+      toast('error', '项目不存在或已移除');
+      location.hash = '#/';
+      return;
+    }
+    showProject(p);
   }
-  function renderHits(hits) {
-    var list = $('search-results');
-    clear(list);
-    hits.forEach(function (h) {
-      var li = el('li', 'item');
-      var head = el('div', 'item-head');
-      head.appendChild(typeBadge(h.type));
-      head.appendChild(el('span', 'badge', h.scope === 'user' ? '用户级' : '项目级'));
-      if (h.stale) head.appendChild(el('span', 'badge stale', '过时'));
-      li.appendChild(head);
-      li.appendChild(el('p', 'item-text', h.text || ''));
-      var meta = el('div', 'item-meta');
-      meta.appendChild(el('span', '', '来源：' + ((h.agents || []).join(' · ') || '—')));
-      meta.appendChild(el('span', '', '最后变更：' + fmtTime(h.last_seen_at)));
-      li.appendChild(meta);
-      li.appendChild(staleAction(h.id, h.stale));
-      list.appendChild(li);
-    });
+  function showHome() {
+    state.view = 'home';
+    $('home-view').hidden = false;
+    $('project-view').hidden = true;
+    window.scrollTo(0, 0);
+    refreshHome();
   }
-  function staleAction(id, stale) {
-    var wrap = el('div', 'row');
-    var btn = el('button', 'small', stale ? '恢复使用' : '不再使用');
-    btn.addEventListener('click', function () {
-      busy(btn, stale ? '恢复' : '标记', function () {
-        return api('/v1/memory/stale', { method: 'POST', body: JSON.stringify({ id: id, stale: !stale }) })
-          .then(function () {
-            toast('info', (stale ? '已恢复' : '已标记为不再使用') + ' #' + id);
-            return loadStats();
-          })
-          .then(function () {
-            if (state.drawer) return loadDrawer();
-            if ($('search-input').value.trim()) return search();
-          });
-      });
-    });
-    wrap.appendChild(btn);
-    return wrap;
+  function showProject(p) {
+    state.view = 'project';
+    state.project = p;
+    $('home-view').hidden = true;
+    $('project-view').hidden = false;
+    $('project-title').textContent = projectLabel(p);
+    $('project-path').textContent = p.primary_path || p.key;
+    window.scrollTo(0, 0);
+    renderOverview(p);
   }
+  window.addEventListener('hashchange', route);
 
   function syncNow() {
     return api('/v1/scan', { method: 'POST' }).then(function (d) {
       var errors = (d.errors || []).length;
       toast(errors ? 'error' : 'info', (errors ? '同步完成但有 ' + errors + ' 个错误' : '同步完成')
         + '：新建 ' + (d.created || 0) + '，合并 ' + (d.merged || 0) + '，任务卡 ' + (d.cards || 0));
-      return refreshAll();
+      return refreshCurrent();
     });
   }
 
-  function refreshAll() {
-    return Promise.all([
-      loadStats().catch(function (e) { toast('error', '刷新统计失败：' + e.message); }),
-      loadProjects().then(function () {
-        return Promise.all([
-          loadTasks().catch(function (e) { toast('error', '刷新任务失败：' + e.message); }),
-          loadHandoff().catch(function (e) { toast('error', '刷新简报失败：' + e.message); })
-        ]);
-      })
-    ]);
-  }
-  function refreshLive() {
-    if (state.drawer) return Promise.resolve();
-    var active = document.activeElement;
-    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) return Promise.resolve();
-    return Promise.all([
-      loadStats().catch(function () {}),
-      loadTasks().catch(function () {})
-    ]);
-  }
-
-  // ---- drawer ----
+  // ---- stats drawer ----
   function openDrawer(kind, trigger) {
     state.drawer = { kind: kind, trigger: trigger || null };
     state.drawerFilter = { stale: kind === 'stale' ? 'stale' : 'all', type: '' };
@@ -703,10 +592,8 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
         li.appendChild(el('div', 'faint mono', p.primary_path || p.key));
         li.appendChild(el('div', 'item-meta', '最近活动：' + fmtTime(p.last_memory_at)));
         li.addEventListener('click', function () {
-          $('project-select').value = p.key;
-          applySelection(); closeDrawer();
-          loadTasks().catch(function (e) { fail('读取任务卡', e); });
-          loadHandoff().catch(function (e) { fail('读取简报', e); });
+          closeDrawer();
+          location.hash = '#/p/' + encodeURIComponent(p.key);
         });
         ul.appendChild(li);
       });
@@ -778,81 +665,49 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
       body.appendChild(ul);
     }, function (e) { clear(body); body.appendChild(el('p', 'muted', '加载失败：' + e.message)); });
   }
-
-  // ---- events ----
-  function bind() {
-    $('project-select').addEventListener('change', function () {
-      applySelection();
-      syncNowSafe(function () {
-        return Promise.all([
-          loadTasks().catch(function (e) { fail('读取任务卡', e); }),
-          loadHandoff().catch(function (e) { fail('读取简报', e); })
-        ]);
+  function staleAction(id, stale) {
+    var wrap = el('div', 'row');
+    var btn = el('button', 'small', stale ? '恢复使用' : '不再使用');
+    btn.addEventListener('click', function () {
+      busy(btn, stale ? '恢复' : '标记', function () {
+        return api('/v1/memory/stale', { method: 'POST', body: JSON.stringify({ id: id, stale: !stale }) })
+          .then(function () {
+            toast('info', (stale ? '已恢复' : '已标记为不再使用') + ' #' + id);
+            return loadStats();
+          })
+          .then(function () {
+            if (state.drawer) return loadDrawer();
+          });
       });
     });
-    $('refresh-btn').addEventListener('click', function () {
-      var btn = this;
-      busy(btn, '刷新', function () { return refreshAll().then(function () { toast('info', '已刷新'); }); });
-    });
-    $('sync-btn').addEventListener('click', function () {
-      var btn = this;
-      busy(btn, '同步', function () { return syncNow(); });
-    });
-    $('search-form').addEventListener('submit', function (e) {
-      e.preventDefault();
-      busy($('search-btn'), '搜索', search);
-    });
-    $('add-scope').addEventListener('change', updateAddHint);
-    $('add-form').addEventListener('submit', function (e) {
-      e.preventDefault();
-      var btn = $('add-btn');
-      busy(btn, '保存', function () {
-        var text = $('add-text').value.trim();
-        if (!text) { toast('error', '请输入记忆内容'); $('add-text').focus(); return; }
-        var scope = $('add-scope').value;
-        var body = { text: text, type: $('add-type').value, scope: scope, agent: 'web' };
-        if (scope === 'project') {
-          if (!state.selected) { toast('error', '请先在顶栏选择具体项目'); return; }
-          if (!state.selected.primary_path) { toast('error', '该项目未登记路径'); return; }
-          body.project_path = state.selected.primary_path;
-        }
-        return api('/v1/memory', { method: 'POST', body: JSON.stringify(body) }).then(function (d) {
-          $('add-text').value = '';
-          toast('info', d.created ? '已保存 #' + d.id : '相同内容已存在 #' + d.id);
-          return loadStats();
-        });
-      });
-    });
-    $('handoff-preview').addEventListener('click', function () {
-      busy(this, '预览', function () { return loadHandoff().then(function () { toast('info', '简报已更新'); }); });
-    });
-    $('handoff-write').addEventListener('click', function () {
-      var btn = this;
-      busy(btn, '生成', function () {
-        if (!state.selected || !state.selected.primary_path) { toast('error', '请先选择有路径的项目'); return; }
-        return api('/v1/handoff', {
-          method: 'POST',
-          body: JSON.stringify({ project_path: state.selected.primary_path, write: true })
-        }).then(function (d) {
-          state.handoff = d.body || '';
-          $('handoff-body').textContent = state.handoff || '无';
-          $('handoff-meta').textContent = '约 ' + (state.handoff.length || 0) + ' 字' + (d.changed ? ' · 已更新' : ' · 内容无变化');
-          toast('info', d.changed ? '已更新项目里的交接简报' : '内容无变化，未重写');
-        });
-      });
-    });
-    Array.prototype.forEach.call(document.querySelectorAll('.stat'), function (btn) {
-      btn.addEventListener('click', function () { openDrawer(btn.getAttribute('data-drawer'), btn); });
-    });
-    $('drawer-close').addEventListener('click', closeDrawer);
-    $('drawer-backdrop').addEventListener('click', closeDrawer);
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && state.drawer) closeDrawer();
-    });
-    window.addEventListener('focus', function () { refreshLive(); });
-    setInterval(function () { refreshLive(); }, 30000);
+    wrap.appendChild(btn);
+    return wrap;
   }
-  function syncNowSafe(fn) { Promise.resolve().then(fn).catch(function (e) { fail('刷新', e); }); }
+
+  function renderTask(c) {
+    var li = el('li', 'item');
+    var head = el('div', 'item-head');
+    head.appendChild(el('strong', '', c.Goal || '（无目标）'));
+    head.appendChild(statusBadge(c.Status));
+    li.appendChild(head);
+    li.appendChild(el('div', 'item-meta', '最近活动：' + fmtTime(c.UpdatedAt)));
+    if (c.NextSteps) {
+      var next = el('p', 'item-text');
+      next.appendChild(el('span', 'muted', '下一步：'));
+      next.appendChild(document.createTextNode(c.NextSteps));
+      li.appendChild(next);
+    }
+    var files = c.Files || [];
+    if (files.length) {
+      var det = el('details');
+      det.appendChild(el('summary', 'muted', '改动文件（' + files.length + '）'));
+      var ul = el('ul', 'list');
+      files.forEach(function (f) { ul.appendChild(el('li', 'faint mono', f)); });
+      det.appendChild(ul);
+      li.appendChild(det);
+    }
+    return li;
+  }
 
   function loadHealth() {
     if (state.healthBusy) return Promise.resolve();
@@ -903,6 +758,30 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     });
   }
 
+  function bind() {
+    $('refresh-btn').addEventListener('click', function () {
+      busy(this, '刷新', refreshCurrent);
+    });
+    $('sync-btn').addEventListener('click', function () {
+      busy(this, '同步', syncNow);
+    });
+    $('back-btn').addEventListener('click', function () { location.hash = '#/'; });
+    Array.prototype.forEach.call(document.querySelectorAll('#project-nav button'), function (btn) {
+      btn.addEventListener('click', function () {
+        var target = document.getElementById(btn.getAttribute('data-scroll'));
+        if (target) target.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+      });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('.stat'), function (btn) {
+      btn.addEventListener('click', function () { openDrawer(btn.getAttribute('data-drawer'), btn); });
+    });
+    $('drawer-close').addEventListener('click', closeDrawer);
+    $('drawer-backdrop').addEventListener('click', closeDrawer);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && state.drawer) closeDrawer();
+    });
+  }
+
   function init() {
     try { if ('scrollRestoration' in history) history.scrollRestoration = 'manual'; } catch (e) {}
     window.scrollTo(0, 0);
@@ -912,7 +791,9 @@ button[disabled]{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
     loadHealth();
     setInterval(loadHealth, 15000);
     loadAutostart();
-    refreshAll().then(function () { state.loaded = true; });
+    loadProjects().then(route);
+    window.addEventListener('focus', function () { refreshLive(); });
+    setInterval(function () { refreshLive(); }, 30000);
   }
   init();
 })();

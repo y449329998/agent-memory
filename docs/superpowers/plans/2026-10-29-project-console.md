@@ -1035,7 +1035,7 @@ func TestIndexPage_Contract(t *testing.T) {
 		`id="drawer"`, `id="drawer-close"`, `id="toasts"`, `id="autostart"`,
 		`#/p/`, `/v1/memory/update`, `offset`, `立即同步`, `生成交接简报`,
 		`用户级记忆`, `包含过时`, `prefers-reduced-motion`,
-		`localStorage`, `30000`, `focus`, `pointer-events:none`,
+		`sessionStorage`, `30000`, `focus`, `pointer-events:none`,
 	}
 	for _, want := range mustHave {
 		if !strings.Contains(page, want) {
