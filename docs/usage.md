@@ -22,7 +22,7 @@
 ```bash
 cd F:/go/agent-memory
 go build -o agent-memory.exe ./cmd/agent-memory          # 命令行与服务
-go build -o agent-memory-app.exe ./cmd/agent-memory-app  # 桌面应用（双击用）
+go build -ldflags "-H windowsgui" -o agent-memory-app.exe ./cmd/agent-memory-app  # 桌面应用（双击用，无控制台窗口）
 ./agent-memory.exe init
 ```
 
@@ -329,9 +329,24 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 
 生命周期：
 
-- **关掉窗口不会停止后台服务**：Qoder 等 agent 的 MCP 调用在窗口关闭后照常工作。后台服务会一直运行到关机，或你在任务管理器里结束 `agent-memory-app.exe`/`agent-memory.exe`。
-- 再次双击只是重新打开窗口，不会起第二个服务。
+- **关掉窗口不会退出应用**：窗口隐藏到系统托盘，后台服务继续跑，Qoder 等 agent 的 MCP 调用照常工作。
+- **再次双击 exe 不会起第二个实例**：会提示「已在运行」，并把已有窗口叫到前台。
+- 窗口位置和大小会自动记住（`~/.agent-memory/window.json`），下次打开还原到上次的位置。
 - 如果 47123 被别的程序占用，会弹窗说明（不会静默换端口，否则 MCP 配置会对不上）。
+
+托盘菜单（右键任务栏通知区的小图标）：
+
+| 菜单项 | 作用 |
+| --- | --- |
+| 打开界面 | 显示/唤起主窗口 |
+| 立即同步 | 立即扫描一次所有 agent 的源（等价于页面上的「立即同步」） |
+| 打开日志 | 用记事本打开 `~/.agent-memory/app.log` |
+| 开机自动运行 | 勾选后写入 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，登录后以托盘模式启动（不弹窗） |
+| 停止服务并退出 | 真正退出：停掉后台服务、释放 47123、移除托盘图标 |
+
+页面右上角的「设置」里也有「开机自动运行」开关，与托盘菜单是同一份状态。
+
+快捷方式：`agent-memory-app.exe --install-shortcuts` 会在桌面和开始菜单各创建一个 `agent-memory.lnk`；`--uninstall-shortcuts` 删除它们。快捷方式图标取自 exe 内嵌图标。
 
 如果机器没有 WebView2 运行时，会自动改用 Edge/Chrome 的「应用窗口」模式，功能一致，只是任务栏图标显示为浏览器。
 
@@ -340,7 +355,11 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 - 弹窗给出原因；
 - 详细日志在 `~/.agent-memory/app.log`。
 
-想让它开机自动在后台运行，可以后面再加（计划任务或启动项），目前需要手动双击一次。
+升级 exe：
+
+1. 托盘菜单选「停止服务并退出」（或任务管理器结束所有 `agent-memory-app.exe`）；
+2. 覆盖 `agent-memory-app.exe`；
+3. 重新双击。配置、记忆库、托盘与开机自启设置都不受影响。
 
 ## 11. MCP 接入
 
@@ -440,9 +459,12 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 | 想看某个源为什么失败 | `doctor` 的「解析失败的源」；修好后 `scan --full` |
 | 提示「拒绝写入 agent 原生目录」 | 该项目的 `primary_path` 落在 agent 配置目录里，属于保护行为，跳过即可 |
 | 双击桌面应用窗口没出现 | 看 `~/.agent-memory/app.log` 末尾；常见原因是 47123 被占用（会弹窗），或 WebView2 运行时缺失（会自动改用 Edge/Chrome 应用窗口） |
-| 关掉桌面窗口后 agent 用不了记忆 | 正常情况下服务会继续在后台跑（`netstat -ano | findstr 47123` 应能看到 LISTENING）；若没有，重新双击应用 |
+| 关掉桌面窗口后 agent 用不了记忆 | 关窗口只是隐藏到托盘，服务应继续在后台跑（`netstat -ano | findstr 47123` 应能看到 LISTENING）；若托盘里也没有图标，看 `app.log` 是否崩溃，再重新双击应用 |
+| 托盘图标不见了 | 在任务栏通知区展开「隐藏的图标」里找；Windows 有时会把新图标默认收起来 |
 | 桌面应用与命令行 serve 谁在跑 | 两者是同一个服务，端口都是 47123；谁先起就复用谁，不会重复启动 |
-| 升级 exe 时提示「文件被占用」 | 桌面应用拉起的服务就是 `agent-memory-app.exe --serve`，它锁着自身二进制。先结束监听 47123 的进程（任务管理器或 `taskkill`），再重建/替换 exe |
+| 开机自启没生效 | 托盘菜单勾选后，`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 里应有 `agent-memory` 值（`reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v agent-memory`）；安全软件可能拦截注册表写入 |
+| 想彻底卸载 | 托盘 → 停止服务并退出；`--uninstall-shortcuts`；取消开机自启；删除 exe 与 `~/.agent-memory`（库和配置都在里面，删前先备份） |
+| 升级 exe 时提示「文件被占用」 | 桌面应用拉起的服务就是 `agent-memory-app.exe --serve`，它锁着自身二进制。托盘菜单选「停止服务并退出」（或任务管理器结束所有 `agent-memory-app.exe`），再替换 exe |
 
 ---
 

@@ -14,6 +14,7 @@ var (
 	procShowWindow      = user32.NewProc("ShowWindow")
 	procMoveWindow      = user32.NewProc("MoveWindow")
 	procGetWindowRect   = user32.NewProc("GetWindowRect")
+	procIsIconic        = user32.NewProc("IsIconic")
 	procGetSystemMetric = user32.NewProc("GetSystemMetrics")
 )
 
@@ -45,9 +46,12 @@ func screenSize() (int, int) {
 	return int(sw), int(sh)
 }
 
-// currentWindowRect 读取窗口当前位置；失败返回零值。
+// currentWindowRect 读取窗口当前位置；最小化或失败返回零值。
 func currentWindowRect(hwnd uintptr) (windowState, bool) {
 	if hwnd == 0 {
+		return windowState{}, false
+	}
+	if min, _, _ := procIsIconic.Call(hwnd); min != 0 {
 		return windowState{}, false
 	}
 	var r rect

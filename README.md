@@ -6,7 +6,7 @@ M1 接入 Qoder 的记忆文件；M2 起再导入它的会话历史，提炼任�
 
 ## 桌面应用
 
-不想用命令行：构建 `go build -o agent-memory-app.exe ./cmd/agent-memory-app`，双击运行即可。它会自动准备配置与数据库、在 47123 端口拉起后台服务，并打开一个「agent-memory 共享记忆」窗口（WebView2；缺失时回退 Edge/Chrome 应用窗口）。关掉窗口不会停掉后台服务，agent 的 MCP 调用不受影响。
+不想用命令行：构建 `go build -ldflags "-H windowsgui" -o agent-memory-app.exe ./cmd/agent-memory-app`，双击运行即可。它会自动准备配置与数据库、在 47123 端口拉起后台服务，并打开一个「agent-memory 共享记忆」窗口（WebView2；缺失时回退 Edge/Chrome 应用窗口）。关掉窗口只是隐藏到系统托盘，后台服务继续运行；再次双击会唤起已有窗口而不是起第二个实例。托盘菜单可立即同步、打开日志、开机自启、停止服务并退出。
 
 详见 [docs/usage.md](docs/usage.md)（命令、配置、Web UI、MCP 接入、排错）。设计文档见 `docs/superpowers/specs/`，实施计划见 `docs/superpowers/plans/`。
 

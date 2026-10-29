@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"sync"
 	"syscall"
+	"time"
 
 	webview2 "github.com/jchv/go-webview2"
 )
@@ -47,7 +49,8 @@ func openWindow(link string, initial *windowState, onClose func(windowState)) (e
 	w.SetSize(windowWidth, windowHeight, webview2.HintNone)
 	w.Navigate(link)
 
-	hwnd := findWindow(appTitle)
+	// 窗口句柄要等 WebView2 真正建窗后才出现；立刻查询必然是 0。
+	hwnd := waitForWindow(appTitle, 3*time.Second)
 	if initial != nil {
 		if hwnd != 0 {
 			applyWindowState(hwnd, *initial)
@@ -56,12 +59,54 @@ func openWindow(link string, initial *windowState, onClose func(windowState)) (e
 		}
 	}
 
+	// 关闭时窗口已被销毁，读不到位置；运行期间每秒记录一次，关窗后写最后一次。
+	var (
+		mu      sync.Mutex
+		last    windowState
+		hasLast bool
+	)
+	stop := make(chan struct{})
+	if hwnd != 0 {
+		go func() {
+			t := time.NewTicker(500 * time.Millisecond)
+			defer t.Stop()
+			for {
+				select {
+				case <-stop:
+					return
+				case <-t.C:
+					if st, ok := currentWindowRect(hwnd); ok && st.W > 0 {
+						mu.Lock()
+						last, hasLast = st, true
+						mu.Unlock()
+					}
+				}
+			}
+		}()
+	}
+
 	w.Run()
+	close(stop)
 
 	if onClose != nil {
-		if st, ok := currentWindowRect(hwnd); ok {
+		mu.Lock()
+		st, ok := last, hasLast
+		mu.Unlock()
+		if ok {
 			onClose(st)
 		}
 	}
 	return nil
+}
+
+// waitForWindow 轮询等待窗口出现；超时返回 0，调用方退回按尺寸设置。
+func waitForWindow(title string, timeout time.Duration) uintptr {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if h := findWindow(title); h != 0 {
+			return h
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return 0
 }
