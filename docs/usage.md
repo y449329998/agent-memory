@@ -9,7 +9,7 @@
 你在 Qoder / Trae / WorkBuddy / OpenCode 之间切换时，每个 agent 各存一份记忆与历史，互不可见。agent-memory 把 Qoder 的长期记忆与会话历史、WorkBuddy 带任务清单的本地会话、Trae 与 WorkBuddy 的记忆文件读进一个本地共享库：
 
 - 记忆去重后统一检索（中文两字词可命中）
-- 会话提炼成任务卡（目标 / 状态 / 改动文件 / 下一步 / 未决问题）
+- 会话提炼成任务，任务可跨会话继续更新（目标 / 状态 / 步骤 / 改动文件 / 下一步 / 未决问题）
 - 每个项目生成 `.agent-memory/HANDOFF.md`，新 agent 接手先读它
 - 常驻服务通过 MCP 让 agent 按需读写；Web UI 供人查看与操作
 
@@ -271,9 +271,10 @@ SQLite FTS5 默认分词搜不到中文（实测：「用户偏好」里搜「�
 
 ---
 
-## 9. 任务卡与交接简报
+## 9. 任务与交接简报
 
-**任务卡**由规则从 Qoder / WorkBuddy 的会话事件抽取（不调用 LLM）：
+**会话摘要卡**仍由规则从 Qoder / WorkBuddy 的会话事件抽取（不调用 LLM），它是内部同步来源：
+
 - 目标：首条真实用户消息；后续用户消息追加。WorkBuddy 的续聊摘要会还原其中的 `<user_query>`，只有截图的会话用会话标题兜底
 - 改动文件：Edit/Write 类工具调用的文件路径
 - 执行命令：Bash 类调用
@@ -282,15 +283,25 @@ SQLite FTS5 默认分词搜不到中文（实测：「用户偏好」里搜「�
 - 状态：末尾连续 ≥2 条错误 → `blocked`；末条 assistant 文本在最后一次命令之后出现「测试通过/验证通过/PASS」等且无否定与失败词 → `done`；否则 `doing`
 - 会话文件静默超过 `settle_idle`（默认 5 分钟）才出卡；先被扫到但还没写完的会话，等静默后的下一次扫描会补出卡，不会覆盖已有卡
 
-**简报**六节固定顺序，内容只来自库里已有的记忆与任务卡：
+**正式任务**是跨会话持续更新的对象：
+
+- 扫描把摘要卡同步成正式任务；WorkBuddy 的 `tasks/<会话>/*.json` 导入为步骤。
+- 任务可以关联多场会话；换 agent 后新会话按同项目同 owner 自动挂到已有任务。
+- 桌面端与 MCP 都能新建、认领、更新状态/步骤/下一步、归档/恢复、合并重复任务。
+- 完成满 30 天自动归档；归档任务从活动列表和简报隐藏，可在任务页恢复。
+- 来源会话路径保留在任务里，摘要不够时回源查看。
+
+**简报**固定顺序，内容来自库里的记忆与正式任务：
 1. 项目概况（project_key、路径、记忆与任务数）
 2. 用户偏好（全局，永不裁剪）
 3. 项目硬约束与约定（永不裁剪）
-4. 最近 3 张任务卡（目标 / 状态 / 关键决策 / 改动文件 / 命令 / 下一步 / 报错）
+4. 进行中的任务（目标 / 状态 / owner / 步骤进度 / 当前步骤 / 下一步 / 文件 / 命令 / 报错）
 5. 未决问题
 6. 共享记忆入口（CLI 与 MCP 用法提示）
 
-预算默认 4000 token。超预算时依次：卡片降级为精简 → 卡片数 3→2→1 → 省略卡片与未决问题整段；偏好、硬约束、入口提示保留。
+没有正式任务的旧库会回退显示最近任务卡，保证兼容。
+
+预算默认 4000 token。超预算时依次：任务详情降级 → 任务数减少 → 省略任务与未决问题整段；偏好、硬约束、入口提示保留。
 
 ---
 
@@ -307,7 +318,10 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 | 页面 | 地址 | 内容 |
 | --- | --- | --- |
 | 总览 | `/` | 统计、项目索引、用户级记忆与新增 |
-| 项目档案 | `/p/<项目key>` | 概况、项目记忆、用户记忆、任务卡、简报、来源、会话 |
+| 项目档案 | `/p/<项目key>` | 概况、项目记忆、用户记忆、正式任务、简报、来源、会话 |
+| 任务 | `/tasks` | 正式任务列表，可切换归档 |
+| 任务详情 | `/t/<任务id>` | 编辑目标/状态/owner/下一步/步骤，查看对话片段与来源会话 |
+| 新建任务 | `/t/new` | 选择项目并创建正式任务 |
 | 记忆档案 | `/memories` | 全部记忆，按关键词/范围/项目/类型/过时筛选，可展开更多 |
 | 来源 | `/sources` | 所有记忆文件与会话文件，可只看失败 |
 | 编辑记忆 | `/m/<记忆id>` | 独立编辑页，保存/取消后回到来源页 |
@@ -317,7 +331,9 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 - 项目档案是「左栏目录 + 右栏正文」：左栏是项目名、路径、记忆/任务/来源统计和七个区块的锚点；右栏按 01–07 编号展示，项目记忆与用户级记忆分开。
 - 记忆条目是账本行：左侧细线按类型着色，点整行进独立编辑页；条目正文按 Markdown 渲染并折叠预览，长内容点进编辑页看全文；项目页只展示前 10 条，点「查看全部」进 `/memories?project=...`。
 - 记忆编辑：独立页面，左侧改正文/类型、右侧实时 Markdown 预览；可保存、取消、标过时/恢复；编辑成与已有条目相同的内容会自动合并并提示。来自 Qoder/Trae 文件的记忆提示「源文件变化后编辑可能被覆盖」。保存后回到进入编辑页时的列表/项目页。
-- 任务卡与交接简报：正文按 Markdown 渲染（标题、列表、表格、代码块）；任务卡的「下一步」过长会折叠，可点「展开全文」。
+- 任务页 `/tasks`：正式任务列表，可切换归档；项目页的任务区只显示当前项目的活动任务。
+- 任务详情 `/t/<id>`：编辑目标、状态、owner、下一步和步骤；查看最近对话片段与来源会话；可归档/恢复、合并重复任务、复制交接 Prompt。
+- 任务与交接简报：正文按 Markdown 渲染（标题、列表、表格、代码块）；任务「下一步」过长会折叠，可点「展开全文」。
 - 来源页列出 agent、文件路径、最后扫描时间、大小与失败原因；项目页只列给该项目贡献过记忆的来源。
 - 同步：自动扫描默认开启（serve 启动先扫一次，之后 fsnotify + 30 秒轮询兜底）；顶部「立即同步」手动触发，完成后刷新当前页。MCP 不是同步前置条件，而是 AI 主动读写共享库的通道。
 - 页面使用真实的页面跳转（浏览器前进/后退可用），不再用弹层/抽屉；支持跨文档 View Transition（Chromium 126+，其它浏览器自动退化为普通跳转）。
@@ -408,7 +424,10 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 | `memory_add` | 写入（`text`/`type` 必填；可 `scope`/`project_path`/`supersedes`） |
 | `memory_list` | 浏览条目 |
 | `handoff_get` | 取项目交接简报 |
-| `task_list` / `task_get` | 任务卡列表 / 单张详情 |
+| `task_list` / `task_get` | 正式任务列表 / 详情（含步骤、片段、来源会话） |
+| `task_add` | 新建正式任务，可带步骤 |
+| `task_update` | 更新目标/状态/下一步/owner/归档，步骤整组替换 |
+| `task_export` | 导出交接 Prompt（带同一个 task_id） |
 | `project_resolve` | 路径 → project_key |
 | `stats` | 库统计 |
 
@@ -422,7 +441,7 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/`、`/p/<key>`、`/m/<id>`、`/memories`、`/sources` | Web UI 页面壳（公开，不含数据与令牌） |
+| GET | `/`、`/p/<key>`、`/m/<id>`、`/tasks`、`/t/<id>`、`/memories`、`/sources` | Web UI 页面壳（公开，不含数据与令牌） |
 | GET | `/v1/healthz` | 健康检查（免鉴权） |
 | GET | `/v1/stats` | 统计 |
 | GET | `/v1/projects` | 项目列表 |
@@ -432,7 +451,13 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 | POST | `/v1/memory/stale` | `{id, stale}` |
 | GET | `/v1/handoff` | `?project_path=|project_key=&format=json\|markdown` |
 | POST | `/v1/handoff` | `{project_path, write}` |
-| GET | `/v1/task` | `?project_path=&status=&limit=` |
+| GET | `/v1/task` | 会话摘要卡：`?project_path=&status=&limit=` |
+| GET | `/v1/tasks` | 正式任务：`?project_key=&status=&include_archived=&limit=` |
+| GET | `/v1/tasks/item` | `?id=`，任务、步骤、片段、来源会话 |
+| POST | `/v1/tasks` | `{project_path, goal, status?, next_steps?, owner_agent?, steps?}` |
+| POST | `/v1/tasks/update` | `{id, goal?, status?, next_steps?, owner_agent?, archived?, steps?}` |
+| POST | `/v1/tasks/merge` | `{source_id, target_id}` |
+| GET | `/v1/tasks/export` | `?id=`，交接 Prompt Markdown |
 | POST | `/v1/project/resolve` | `{path}` |
 | POST | `/v1/scan` | 触发一次扫描 |
 | POST | `/mcp` | MCP JSON-RPC（stdio 桥的目标） |
@@ -484,11 +509,12 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 ## 15. 已知限制
 
 - 会话事件文本入库截断到 500 字符；不保存完整 transcript
-- 任务卡是规则抽取，不理解语义；`done` 判定依赖关键词（已排除否定与部分通过）
+- 任务状态与摘要由规则抽取或人工维护，不理解语义；30 天归档只看完成时间，不判断任务是否真的结束
+- 任务片段最多保留最近 20 条、单条 500 字；不保存完整 transcript，需要全文时回源会话文件
 - 检索是字面二元组，跨标点短语会漏（见第 8 节）
 - 纯「删除文件 → 用完全相同内容恢复」若从未观察到读错误，条目会一直 stale（`scan --full` 或 `memory purge` 可处理）
 - `last_seen_at` 语义是「最后变更」而非「最后见到」
-- Trae 只有记忆、没有本地会话：Trae 读 `memory/`、`memory/projects/*/project_memory.md` 与 `user_rules/`，会话正文在云端，`state.vscdb` 只有界面状态，所以不产生任务卡；WorkBuddy 除 `~/.workbuddy/MEMORY.md` 外，还导入带任务清单的 `projects/*.jsonl` 会话并生成任务卡；两者不接 MCP，靠项目里的 `HANDOFF.md` 读取共享记忆
+- Trae 只有记忆、没有本地会话：Trae 读 `memory/`、`memory/projects/*/project_memory.md` 与 `user_rules/`，会话正文在云端，`state.vscdb` 只有界面状态，所以不产生任务；WorkBuddy 除 `~/.workbuddy/MEMORY.md` 外，还导入带任务清单的 `projects/*.jsonl` 会话与 `tasks/` 步骤；两者不接 MCP，靠项目里的 `HANDOFF.md` 读取共享记忆
 - WorkBuddy 不参与文件监听（`~/.workbuddy` 根目录有大量应用缓存，监听会放大事件量），记忆、会话与任务清单的变化由 30 秒轮询兜底；Trae 只监听 `memory/` 与 `user_rules/`，`workspaceStorage` 的变化不触发扫描
 - OpenCode 的会话/记忆与 Trae 的云端会话尚未接入
 - `git worktree` / submodule 的 `.git` 是文件，目前读不到 remote，会退化为路径 key

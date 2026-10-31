@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -99,7 +100,7 @@ func (a *Adapter) scanSessions(ctx context.Context) ([]agent.SessionUnit, error)
 			if e, ok := a.cachedSession(f, st.Size(), st.ModTime()); ok {
 				out = append(out, agent.SessionUnit{
 					Path: f, Hash: e.hash, MTime: st.ModTime(), Size: st.Size(),
-					Session: e.sess, Events: e.events,
+					Session: e.sess, Events: e.events, Steps: readTaskSteps(a.Home, externalID),
 				})
 				continue
 			}
@@ -112,10 +113,11 @@ func (a *Adapter) scanSessions(ctx context.Context) ([]agent.SessionUnit, error)
 				// 没有 cwd 就无从判断归属；交给 ingest 只会建出孤立项目。
 				continue
 			}
-			a.rememberSession(f, st.Size(), st.ModTime(), hash, sess, events)
+			steps := readTaskSteps(a.Home, externalID)
+			a.rememberSession(f, st.Size(), st.ModTime(), hash, sess, events, steps)
 			out = append(out, agent.SessionUnit{
 				Path: f, Hash: hash, MTime: st.ModTime(), Size: st.Size(),
-				Session: sess, Events: events,
+				Session: sess, Events: events, Steps: steps,
 			})
 		}
 	}
@@ -132,13 +134,69 @@ func (a *Adapter) cachedSession(path string, size int64, mtime time.Time) (sessi
 	return e, true
 }
 
-func (a *Adapter) rememberSession(path string, size int64, mtime time.Time, hash string, sess domain.Session, events []agent.SessionEvent) {
+func (a *Adapter) rememberSession(path string, size int64, mtime time.Time, hash string, sess domain.Session, events []agent.SessionEvent, steps []agent.TaskStepDraft) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.session == nil {
 		a.session = make(map[string]sessionCacheEntry)
 	}
-	a.session[path] = sessionCacheEntry{size: size, mtime: mtime, hash: hash, sess: sess, events: events}
+	a.session[path] = sessionCacheEntry{size: size, mtime: mtime, hash: hash, sess: sess, events: events, steps: steps}
+}
+
+func readTaskSteps(home, sessionID string) []agent.TaskStepDraft {
+	dir := filepath.Join(home, "tasks", sessionID)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	type item struct {
+		key  int
+		file string
+	}
+	var files []item
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimSuffix(e.Name(), ".json"))
+		if err != nil {
+			continue
+		}
+		files = append(files, item{key: n, file: filepath.Join(dir, e.Name())})
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].key < files[j].key })
+	var out []agent.TaskStepDraft
+	for _, f := range files {
+		raw, err := os.ReadFile(f.file)
+		if err != nil {
+			continue
+		}
+		var payload struct {
+			Subject     string `json:"subject"`
+			Description string `json:"description"`
+			ActiveForm  string `json:"activeForm"`
+			Status      string `json:"status"`
+		}
+		if json.Unmarshal(raw, &payload) != nil || strings.TrimSpace(payload.Subject) == "" {
+			continue
+		}
+		status := domain.StepPending
+		switch payload.Status {
+		case "in_progress":
+			status = domain.StepDoing
+		case "completed":
+			status = domain.StepDone
+		}
+		out = append(out, agent.TaskStepDraft{
+			SourceKey: strings.TrimSuffix(filepath.Base(f.file), ".json"),
+			Subject:   payload.Subject, Description: payload.Description,
+			ActiveForm: payload.ActiveForm, Status: status,
+		})
+		if len(out) == 100 {
+			break
+		}
+	}
+	return out
 }
 
 // parseSessionFile 流式读取会话并同时算哈希，避免把几十 MB 原文整份读进内存。

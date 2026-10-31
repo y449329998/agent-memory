@@ -98,19 +98,91 @@ func (s *Server) Tasks(ctx context.Context, in mcp.TaskInput) (any, error) {
 	if limit <= 0 {
 		limit = 5
 	}
-	cards, err := s.st.ListTaskCards(ctx, projectID, in.Status, limit)
+	tasks, err := s.st.ListTasks(ctx, store.TaskFilter{
+		ProjectID: projectID, Status: in.Status, IncludeArchived: in.IncludeArchived, Limit: limit,
+	})
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"cards": cards, "count": len(cards)}, nil
+	return map[string]any{"tasks": tasks, "cards": tasks, "count": len(tasks)}, nil
 }
 
 func (s *Server) TaskGet(ctx context.Context, id int64) (any, error) {
-	card, err := s.st.GetTaskCard(ctx, id)
+	detail, ok, err := s.st.TaskDetail(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	return card, nil
+	if !ok {
+		return nil, domain.ErrTaskCardNotFound
+	}
+	return detail, nil
+}
+
+func (s *Server) AddTask(ctx context.Context, in mcp.AddTaskInput) (any, error) {
+	now := time.Now()
+	projectID, err := s.taskProjectID(ctx, in.ProjectPath, "mcp", now)
+	if err != nil {
+		return nil, err
+	}
+	steps := make([]domain.TaskStep, 0, len(in.Steps))
+	for _, step := range in.Steps {
+		steps = append(steps, domain.TaskStep{
+			Subject: step.Subject, Description: step.Description,
+			ActiveForm: step.ActiveForm, Status: step.Status,
+			CreatedAt: now, UpdatedAt: now,
+		})
+	}
+	id, err := s.st.CreateTask(ctx, domain.Task{
+		ProjectID: projectID, Goal: in.Goal, Status: in.Status,
+		NextSteps: in.NextSteps, OwnerAgent: in.OwnerAgent,
+		SourceAgent: "mcp", ManualEditedAt: now, CreatedAt: now, UpdatedAt: now, Steps: steps,
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.refreshTaskHandoff(ctx, projectID)
+	return map[string]any{"id": id}, nil
+}
+
+func (s *Server) UpdateTask(ctx context.Context, in mcp.UpdateTaskInput) (any, error) {
+	var steps *[]domain.TaskStep
+	if in.Steps != nil {
+		converted := make([]domain.TaskStep, 0, len(*in.Steps))
+		for _, step := range *in.Steps {
+			converted = append(converted, domain.TaskStep{
+				Subject: step.Subject, Description: step.Description,
+				ActiveForm: step.ActiveForm, Status: step.Status,
+			})
+		}
+		steps = &converted
+	}
+	task, err := s.st.UpdateTask(ctx, store.TaskUpdate{
+		ID: in.ID, Goal: in.Goal, Status: in.Status, NextSteps: in.NextSteps,
+		OwnerAgent: in.OwnerAgent, Archived: in.Archived, Steps: steps,
+	}, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	s.refreshTaskHandoff(ctx, task.ProjectID)
+	return task, nil
+}
+
+func (s *Server) ExportTask(ctx context.Context, id int64) (any, error) {
+	detail, ok, err := s.st.TaskDetail(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, domain.ErrTaskCardNotFound
+	}
+	project, ok, err := s.st.ProjectByID(ctx, detail.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, domain.ErrTaskCardNotFound
+	}
+	return map[string]any{"markdown": compose.RenderTaskExport(detail.Task, detail.Snippets, project)}, nil
 }
 
 func (s *Server) ResolveProject(ctx context.Context, path string) (any, error) {

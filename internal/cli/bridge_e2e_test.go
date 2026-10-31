@@ -55,8 +55,8 @@ func TestBridgeToEndToEnd(t *testing.T) {
 	// tools/list
 	resp = roundTrip(t, bridge, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
 	tools := resp["result"].(map[string]any)["tools"].([]any)
-	if len(tools) != 8 {
-		t.Fatalf("want 8 tools over the bridge, got %d", len(tools))
+	if len(tools) != 11 {
+		t.Fatalf("want 11 tools over the bridge, got %d", len(tools))
 	}
 	t.Logf("stdio -> HTTP -> daemon: %d tools", len(tools))
 

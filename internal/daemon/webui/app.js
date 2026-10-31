@@ -433,7 +433,7 @@
     clear(rail);
     rail.appendChild(railItem('项目记忆', 'rail-project'));
     rail.appendChild(railItem('用户级', 'rail-user'));
-    rail.appendChild(railItem('任务卡', 'rail-tasks'));
+    rail.appendChild(railItem('任务', 'rail-tasks'));
     rail.appendChild(railItem('来源', 'rail-sources'));
     rail.appendChild(railItem('失败源', 'rail-failed'));
     bindHandoff();
@@ -459,6 +459,7 @@
       $('rail-project').textContent = p.memory_count || 0;
       $('rail-tasks').textContent = p.task_count || 0;
       $('all-memories').href = '/memories?project=' + enc(p.key) + '&scope=project';
+      $('task-more').href = '/tasks?project_key=' + enc(p.key);
       renderOverview(p);
       bindProjectAdd(p);
       await Promise.all([
@@ -513,40 +514,39 @@
       $('rail-user').textContent = d.total || 0;
     } catch (e) { emptyRow(list, '用户级记忆加载失败：' + e.message); }
   }
+  function taskProgress(t) {
+    const steps = t.Steps || t.steps || [];
+    let done = 0;
+    steps.forEach((s) => { if (s.Status === 'done' || s.Status === 'skipped' || s.status === 'done' || s.status === 'skipped') done++; });
+    return steps.length ? done + '/' + steps.length : '无步骤';
+  }
   async function loadTasks(key) {
     const box = $('task-list');
     clear(box);
     try {
-      const d = await api('/v1/task?project_key=' + enc(key) + '&limit=20');
-      const cards = d.cards || [];
-      cards.forEach((c) => {
+      const d = await api('/v1/tasks?project_key=' + enc(key) + '&limit=20');
+      const tasks = d.tasks || [];
+      tasks.forEach((t) => {
         const card = el('article', 'card');
         const head = el('div', 'card-head');
-        head.appendChild(el('strong', '', clipText(plainPreview(c.Goal || '（无目标）'), 160)));
-        head.appendChild(statusStamp(c.Status));
+        const title = el('a', 'task-link', clipText(plainPreview(t.Goal || '（无目标）'), 100));
+        title.href = '/t/' + t.ID;
+        head.appendChild(title);
+        head.appendChild(statusStamp(t.Status));
+        head.appendChild(el('span', 'stamp tiny', t.OwnerAgent || '未认领'));
         card.appendChild(head);
-        if (c.NextSteps) {
-          card.appendChild(el('div', 'meta', '下一步'));
+        card.appendChild(el('div', 'meta', '步骤 ' + taskProgress(t) + ' · ' + (t.SourceAgent || '手动')));
+        if (t.NextSteps) {
           const md = el('div', 'md md-clamp card-md');
-          renderMd(md, c.NextSteps);
+          renderMd(md, t.NextSteps);
           card.appendChild(md);
-          attachExpand(md);
-        }
-        card.appendChild(el('div', 'meta', '最近活动：' + fmtTime(c.UpdatedAt)));
-        if (c.Files && c.Files.length) {
-          const det = el('details');
-          det.appendChild(el('summary', 'meta', '改动文件（' + c.Files.length + '）'));
-          const ul = el('ul');
-          c.Files.forEach((f) => ul.appendChild(el('li', '', f)));
-          det.appendChild(ul);
-          card.appendChild(det);
         }
         box.appendChild(card);
       });
-      if (!cards.length) box.appendChild(el('p', 'empty', '还没有任务卡。Qoder / WorkBuddy 的会话会在静默后提炼成任务卡；Trae 的会话正文在云端，暂不支持。'));
-      $('task-meta').textContent = cards.length ? '共 ' + cards.length + ' 张' : '';
+      if (!tasks.length) box.appendChild(el('p', 'empty', '还没有任务。'));
+      $('task-meta').textContent = tasks.length ? '共 ' + tasks.length + ' 个任务' : '';
     } catch (e) {
-      box.appendChild(el('p', 'empty', '任务卡加载失败：' + e.message));
+      box.appendChild(el('p', 'empty', '任务加载失败：' + e.message));
     }
   }
   async function fetchHandoff(key) {
@@ -743,6 +743,211 @@
     }
   }
 
+  /* ---------- 任务页 ---------- */
+  async function initTasks() {
+    const list = $('task-cards');
+    const params = new URLSearchParams(location.search);
+    const archived = params.get('archived') === '1';
+    const projectKey = params.get('project_key') || '';
+    $('tasks-archived').checked = archived;
+    async function load() {
+      clear(list);
+      list.appendChild(el('p', 'empty', '载入中…'));
+      try {
+        const query = ['limit=100'];
+        if (projectKey) query.push('project_key=' + enc(projectKey));
+        if (archived) query.push('include_archived=1');
+        const d = await api('/v1/tasks?' + query.join('&'));
+        const tasks = d.tasks || [];
+        clear(list);
+        tasks.forEach((t) => {
+          const card = el('article', 'card');
+          const head = el('div', 'card-head');
+          const title = el('a', 'task-link', clipText(plainPreview(t.Goal || '（无目标）'), 100));
+          title.href = '/t/' + t.ID;
+          head.appendChild(title);
+          head.appendChild(statusStamp(t.Status));
+          head.appendChild(el('span', 'stamp tiny', t.OwnerAgent || '未认领'));
+          card.appendChild(head);
+          if (isRealTime(t.ArchivedAt)) head.appendChild(el('span', 'stamp tiny stale-mark', '已归档'));
+          card.appendChild(el('div', 'meta', '步骤 ' + taskProgress(t) + ' · ' + (t.SourceAgent || '手动') + ' · 最近更新 ' + fmtTime(t.UpdatedAt)));
+          const a = el('a', 'more', '打开任务 →');
+          a.href = '/t/' + t.ID;
+          card.appendChild(a);
+          list.appendChild(card);
+        });
+        if (!tasks.length) list.appendChild(el('p', 'empty', '还没有任务。'));
+        $('tasks-meta').textContent = '共 ' + tasks.length + ' 条';
+      } catch (e) {
+        clear(list);
+        list.appendChild(el('p', 'empty', '加载失败：' + e.message));
+      }
+    }
+    $('tasks-archived').addEventListener('change', () => {
+      const qs = new URLSearchParams(location.search);
+      if ($('tasks-archived').checked) qs.set('archived', '1');
+      else qs.delete('archived');
+      location.search = qs.toString();
+    });
+    load();
+  }
+
+  function isRealTime(v) {
+    return !!v && new Date(v).getFullYear() > 1;
+  }
+
+  function initTask() {
+    const id = document.body.dataset.taskId || '';
+    const isNew = !id;
+    const form = $('task-form');
+    const stepsBox = $('task-steps');
+    const rows = [];
+    const projectField = $('task-project-field');
+    if (!isNew) projectField.hidden = true;
+    const statusSel = $('task-status');
+    [['doing', '进行中'], ['blocked', '受阻'], ['done', '已完成'], ['unknown', '未知']].forEach(function (pair) {
+      const opt = el('option', '', pair[1]); opt.value = pair[0]; statusSel.appendChild(opt);
+    });
+    statusSel.value = 'doing';
+
+    function addStep(step) {
+      const row = el('div', 'step-row');
+      const status = el('select');
+      [['pending', '待办'], ['doing', '进行中'], ['done', '完成'], ['blocked', '受阻'], ['skipped', '跳过']].forEach(function (pair) {
+        const opt = el('option', '', pair[1]); opt.value = pair[0]; status.appendChild(opt);
+      });
+      status.value = step.Status || step.status || 'pending';
+      const subject = el('input');
+      subject.type = 'text';
+      subject.value = step.Subject || step.subject || '';
+      subject.placeholder = '步骤内容';
+      const remove = el('button', 'step-remove', '×');
+      remove.type = 'button';
+      remove.title = '删除步骤';
+      const entry = { row: row, status: status, subject: subject };
+      remove.addEventListener('click', function () { row.remove(); const i = rows.indexOf(entry); if (i >= 0) rows.splice(i, 1); });
+      rows.push(entry);
+      row.appendChild(status); row.appendChild(subject); row.appendChild(remove);
+      stepsBox.appendChild(row);
+    }
+    function readSteps() {
+      return rows.filter(function (r) { return r.subject.value.trim() !== ''; }).map(function (r) {
+        return { subject: r.subject.value.trim(), status: r.status.value };
+      });
+    }
+    function renderNextPreview() {
+      const box = $('task-next-preview');
+      if (box) renderMd(box, $('task-next').value || '');
+    }
+    $('task-next').addEventListener('input', renderNextPreview);
+
+    $('task-add-step').addEventListener('click', function () { addStep({ Status: 'pending' }); });
+
+    async function load() {
+      if (isNew) { addStep({ Status: 'pending' }); renderNextPreview(); return; }
+      const d = await api('/v1/tasks/item?id=' + enc(id));
+      $('task-id').textContent = '#' + d.ID;
+      $('task-title').textContent = clipText(plainPreview(d.Goal || '任务'), 28);
+      $('task-crumb').textContent = '#' + d.ID;
+      $('task-goal').value = d.Goal || '';
+      statusSel.value = d.Status || 'doing';
+      $('task-owner').value = d.OwnerAgent || '';
+      $('task-next').value = d.NextSteps || '';
+      renderNextPreview();
+      (d.Steps || []).forEach(addStep);
+      if (!rows.length) addStep({ Status: 'pending' });
+      $('task-meta').textContent = '来源 ' + (d.SourceAgent || '手动') + ' · 最近更新 ' + fmtTime(d.UpdatedAt) + (isRealTime(d.ArchivedAt) ? ' · 已归档' : '');
+      $('task-archive').textContent = isRealTime(d.ArchivedAt) ? '恢复' : '归档';
+      const snippetBox = $('snippet-list');
+      clear(snippetBox);
+      (d.Snippets || []).forEach(function (s) {
+        const wrap = el('div', 'snippet');
+        wrap.appendChild(el('div', 'meta', s.Role + ' · ' + fmtTime(s.Ts)));
+        const body = el('div', 'md');
+        renderMd(body, s.Text || '');
+        wrap.appendChild(body);
+        snippetBox.appendChild(wrap);
+      });
+      if (!(d.Snippets || []).length) snippetBox.appendChild(el('p', 'empty', '还没有对话片段。'));
+      const sessionBox = $('session-list');
+      clear(sessionBox);
+      (d.Sessions || []).forEach(function (s) {
+        const li = el('li', 'src-row');
+        li.appendChild(el('span', 'agent', s.Agent || ''));
+        li.appendChild(el('span', 'path', s.Title || ''));
+        li.appendChild(el('span', 'when', fmtTime(s.UpdatedAt)));
+        sessionBox.appendChild(li);
+      });
+      if (!(d.Sessions || []).length) sessionBox.appendChild(el('li', 'empty', '没有关联会话。'));
+    }
+
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      const btn = form.querySelector('button[type="submit"]');
+      busy(btn, '保存', async function () {
+        const payload = {
+          goal: $('task-goal').value.trim(),
+          status: statusSel.value,
+          owner_agent: $('task-owner').value.trim(),
+          next_steps: $('task-next').value,
+          steps: readSteps()
+        };
+        if (!payload.goal) { toast('error', '请先写目标'); return; }
+        if (isNew) {
+          payload.project_path = $('task-project').value.trim();
+          if (!payload.project_path) { toast('error', '请填写项目路径'); return; }
+          const d = await api('/v1/tasks', { method: 'POST', body: JSON.stringify(payload) });
+          location.href = '/t/' + d.id;
+          return;
+        }
+        payload.id = Number(id);
+        await api('/v1/tasks/update', { method: 'POST', body: JSON.stringify(payload) });
+        toast('info', '已保存');
+        location.reload();
+      });
+    });
+
+    $('task-archive').addEventListener('click', function () {
+      if (isNew) return;
+      const btn = this;
+      busy(btn, '处理', async function () {
+        const d = await api('/v1/tasks/item?id=' + enc(id));
+        const archived = isRealTime(d.ArchivedAt);
+        await api('/v1/tasks/update', { method: 'POST', body: JSON.stringify({ id: Number(id), archived: !archived }) });
+        toast('info', archived ? '已恢复' : '已归档');
+        location.reload();
+      });
+    });
+
+    $('task-copy').addEventListener('click', async function () {
+      if (isNew) return;
+      const d = await api('/v1/tasks/export?id=' + enc(id));
+      const markdown = d.markdown || '';
+      try {
+        await navigator.clipboard.writeText(markdown);
+        toast('info', '交接 Prompt 已复制');
+      } catch (e) {
+        window.prompt('复制失败，请手动复制', markdown);
+      }
+    });
+
+    $('task-merge').addEventListener('click', function () {
+      if (isNew) return;
+      const target = window.prompt('输入要合并到的目标任务 ID');
+      if (!target) return;
+      const targetID = Number(target);
+      if (!targetID || targetID === Number(id)) { toast('error', '目标 ID 无效'); return; }
+      const btn = this;
+      busy(btn, '合并', async function () {
+        await api('/v1/tasks/merge', { method: 'POST', body: JSON.stringify({ source_id: Number(id), target_id: targetID }) });
+        toast('info', '已合并');
+        location.href = '/t/' + targetID;
+      });
+    });
+
+    load().catch(function (e) { toast('error', '任务加载失败：' + e.message); });
+  }
+
   /* ---------- 编辑页 ---------- */
   function safeNext(v) {
     if (!v || v.charAt(0) !== '/' || v.charAt(1) === '/' || v.includes('\\')) return '';
@@ -850,6 +1055,8 @@
     else if (view === 'project') initProject();
     else if (view === 'memories') initMemories();
     else if (view === 'sources') initSources();
+    else if (view === 'tasks') initTasks();
+    else if (view === 'task') initTask();
     else if (view === 'edit') initEdit();
   }
   init();

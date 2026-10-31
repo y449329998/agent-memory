@@ -25,6 +25,9 @@ func TestPagesServeShells(t *testing.T) {
 		{"/m/123", `data-view="edit"`},
 		{"/memories", `data-view="memories"`},
 		{"/sources", `data-view="sources"`},
+		{"/tasks", `data-view="tasks"`},
+		{"/t/new", `data-view="task"`},
+		{"/t/1", `data-view="task" data-task-id="1"`},
 	}
 	for _, c := range cases {
 		rec := webDo(t, s, http.MethodGet, c.path, "", nil, nil)

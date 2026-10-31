@@ -29,6 +29,7 @@ type sessionCacheEntry struct {
 	hash   string
 	sess   domain.Session
 	events []agent.SessionEvent
+	steps  []agent.TaskStepDraft
 }
 
 var (

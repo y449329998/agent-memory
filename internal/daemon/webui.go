@@ -14,8 +14,8 @@ import (
 var webuiFS embed.FS
 
 var webuiPages = func() map[string]*template.Template {
-	pages := make(map[string]*template.Template, 5)
-	for _, name := range []string{"home", "project", "memories", "sources", "edit"} {
+	pages := make(map[string]*template.Template, 7)
+	for _, name := range []string{"home", "project", "memories", "sources", "edit", "tasks", "task"} {
 		pages[name] = template.Must(template.ParseFS(webuiFS, "webui/layout.html", "webui/"+name+".html"))
 	}
 	return pages
@@ -26,6 +26,7 @@ type pageData struct {
 	View     string
 	Key      string
 	MemoryID string
+	TaskID   string
 }
 
 func (s *Server) renderPage(w http.ResponseWriter, view string, data pageData) {
@@ -59,6 +60,14 @@ func (s *Server) handleMemoriesPage(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleSourcesPage(w http.ResponseWriter, _ *http.Request) {
 	s.renderPage(w, "sources", pageData{Title: "来源", View: "sources"})
+}
+
+func (s *Server) handleTasksPage(w http.ResponseWriter, _ *http.Request) {
+	s.renderPage(w, "tasks", pageData{Title: "任务", View: "tasks"})
+}
+
+func (s *Server) handleTaskPage(w http.ResponseWriter, r *http.Request) {
+	s.renderPage(w, "task", pageData{Title: "任务详情", View: "task", TaskID: r.PathValue("id")})
 }
 
 func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {

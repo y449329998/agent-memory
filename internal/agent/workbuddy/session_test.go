@@ -253,3 +253,27 @@ func TestScanSessionsSkipsSessionsWithoutTasksOrCwd(t *testing.T) {
 		t.Fatalf("unexpected unit: %+v", units[0].Session)
 	}
 }
+
+func TestScanSessionsImportsTodoSteps(t *testing.T) {
+	cwd := t.TempDir()
+	home, id := buildSessionHome(t, cwd)
+	writeFile(t, filepath.Join(home, "tasks", id, "2.json"),
+		`{"subject":"补测试","description":"覆盖导出","activeForm":"正在补测试","status":"in_progress"}`)
+	writeFile(t, filepath.Join(home, "tasks", id, "1.json"),
+		`{"subject":"写接口","status":"completed"}`)
+
+	units, err := New(home).ScanSessionUnits(context.Background())
+	if err != nil || len(units) != 1 {
+		t.Fatalf("scan: %v %+v", err, units)
+	}
+	steps := units[0].Steps
+	if len(steps) != 2 {
+		t.Fatalf("steps = %+v", steps)
+	}
+	if steps[0].SourceKey != "1" || steps[0].Subject != "写接口" || steps[0].Status != "done" {
+		t.Fatalf("step 0 = %+v", steps[0])
+	}
+	if steps[1].SourceKey != "2" || steps[1].Status != "doing" {
+		t.Fatalf("step 1 = %+v", steps[1])
+	}
+}

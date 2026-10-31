@@ -35,9 +35,36 @@ type HandoffInput struct {
 }
 
 type TaskInput struct {
-	ProjectPath string `json:"project_path"`
+	ProjectPath     string `json:"project_path"`
+	Status          string `json:"status"`
+	IncludeArchived bool   `json:"include_archived"`
+	Limit           int    `json:"limit"`
+}
+
+type TaskStepInput struct {
+	Subject     string `json:"subject"`
+	Description string `json:"description"`
+	ActiveForm  string `json:"active_form"`
 	Status      string `json:"status"`
-	Limit       int    `json:"limit"`
+}
+
+type AddTaskInput struct {
+	ProjectPath string          `json:"project_path"`
+	Goal        string          `json:"goal"`
+	Status      string          `json:"status"`
+	NextSteps   string          `json:"next_steps"`
+	OwnerAgent  string          `json:"owner_agent"`
+	Steps       []TaskStepInput `json:"steps"`
+}
+
+type UpdateTaskInput struct {
+	ID         int64            `json:"id"`
+	Goal       *string          `json:"goal"`
+	Status     *string          `json:"status"`
+	NextSteps  *string          `json:"next_steps"`
+	OwnerAgent *string          `json:"owner_agent"`
+	Archived   *bool            `json:"archived"`
+	Steps      *[]TaskStepInput `json:"steps"`
 }
 
 // ToolAPI 是 MCP 层与共享记忆之间的全部接触面。
@@ -49,6 +76,9 @@ type ToolAPI interface {
 	Handoff(ctx context.Context, in HandoffInput) (any, error)
 	Tasks(ctx context.Context, in TaskInput) (any, error)
 	TaskGet(ctx context.Context, id int64) (any, error)
+	AddTask(ctx context.Context, in AddTaskInput) (any, error)
+	UpdateTask(ctx context.Context, in UpdateTaskInput) (any, error)
+	ExportTask(ctx context.Context, id int64) (any, error)
 	ResolveProject(ctx context.Context, path string) (any, error)
 	Stats(ctx context.Context) (any, error)
 }
@@ -109,6 +139,27 @@ func (s *Server) toolDefinitions() []toolDef {
 				"limit":        map[string]any{"type": "integer"},
 			})},
 		{"task_get", "按 id 取单张任务卡的全部内容。task_list 之后按需展开细节用这个，别把整份简报复述一遍。",
+			objectSchema(map[string]any{"id": map[string]any{"type": "integer"}}, "id")},
+		{"task_add", "新建正式任务，可带步骤。",
+			objectSchema(map[string]any{
+				"project_path": map[string]any{"type": "string"},
+				"goal":         map[string]any{"type": "string"},
+				"status":       map[string]any{"type": "string", "enum": []string{"doing", "done", "blocked", "unknown"}},
+				"next_steps":   map[string]any{"type": "string"},
+				"owner_agent":  map[string]any{"type": "string"},
+				"steps":        map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
+			}, "project_path", "goal")},
+		{"task_update", "更新任务、认领、归档或整组替换步骤。",
+			objectSchema(map[string]any{
+				"id":          map[string]any{"type": "integer"},
+				"goal":        map[string]any{"type": "string"},
+				"status":      map[string]any{"type": "string", "enum": []string{"doing", "done", "blocked", "unknown"}},
+				"next_steps":  map[string]any{"type": "string"},
+				"owner_agent": map[string]any{"type": "string"},
+				"archived":    map[string]any{"type": "boolean"},
+				"steps":       map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
+			}, "id")},
+		{"task_export", "导出交接 Prompt，带同一个 task_id。",
 			objectSchema(map[string]any{"id": map[string]any{"type": "integer"}}, "id")},
 		{"project_resolve", "把任意目录路径解析成共享库里的 project_key，用来确认两个 agent 看的是同一个项目。",
 			objectSchema(map[string]any{"path": map[string]any{"type": "string"}}, "path")},
@@ -171,6 +222,32 @@ func (s *Server) callTool(ctx context.Context, raw json.RawMessage) (any, error)
 				return nil, fmt.Errorf("id must be a positive integer")
 			}
 			return s.api.TaskGet(ctx, in.ID)
+		case "task_add":
+			var in AddTaskInput
+			if err := bind(p.Arguments, &in); err != nil {
+				return nil, err
+			}
+			return s.api.AddTask(ctx, in)
+		case "task_update":
+			var in UpdateTaskInput
+			if err := bind(p.Arguments, &in); err != nil {
+				return nil, err
+			}
+			if in.ID <= 0 {
+				return nil, fmt.Errorf("id must be a positive integer")
+			}
+			return s.api.UpdateTask(ctx, in)
+		case "task_export":
+			var in struct {
+				ID int64 `json:"id"`
+			}
+			if err := bind(p.Arguments, &in); err != nil {
+				return nil, err
+			}
+			if in.ID <= 0 {
+				return nil, fmt.Errorf("id must be a positive integer")
+			}
+			return s.api.ExportTask(ctx, in.ID)
 		case "project_resolve":
 			var in struct {
 				Path string `json:"path"`

@@ -1,0 +1,17 @@
+{{define "content"}}
+<nav class="crumbs" aria-label="面包屑"><a href="/">总览</a><span class="sep">/</span><span>任务</span></nav>
+<header class="page-head">
+  <p class="kicker">TASKS</p>
+  <h1 class="display-sm">任务</h1>
+  <p class="lede">跨会话持续更新；换 agent 时从同一个任务继续。</p>
+</header>
+<section class="section">
+  <div class="section-head">
+    <h2>任务列表</h2>
+    <span id="tasks-meta" class="meta"></span>
+    <a class="more" href="/t/new">新建任务 <span aria-hidden="true">→</span></a>
+  </div>
+  <div class="row"><label class="check"><input id="tasks-archived" type="checkbox"> 显示归档</label></div>
+  <div id="task-cards" class="cards"></div>
+</section>
+{{end}}

@@ -101,43 +101,78 @@ func (c *Composer) Render(ctx context.Context, projectID int64) (Result, error) 
 		return Result{}, err
 	}
 
-	overview := renderOverview(project, len(userItems), len(projectItems), len(cards))
+	tasks, err := c.st.ListTasks(ctx, store.TaskFilter{ProjectID: projectID, Limit: c.cfg.RecentCards})
+	if err != nil {
+		return Result{}, err
+	}
+	taskCount := len(cards)
+	if len(tasks) > 0 {
+		taskCount = len(tasks)
+	}
+	overview := renderOverview(project, len(userItems), len(projectItems), taskCount)
 	prefs := renderList("## 用户偏好", userItems)
 	constraints := renderList("## 项目硬约束与约定", projectItems)
 	entry := renderEntry(project.Key)
-
-	// 三档卡片渲染，从详细到骨架，预算不够就整档替换。
-	full := renderCards(cards, cardSessions, cardDetailFull)
-	lean := renderCards(cards, cardSessions, cardDetailLean)
 
 	type attempt struct {
 		cards     string
 		questions string
 		truncated bool
 	}
-	attempts := []attempt{
-		{cards: section("## 最近任务", full), questions: renderQuestions(cards)},
-		{cards: section("## 最近任务", lean), questions: renderQuestions(cards), truncated: true},
-	}
-	for _, ask := range []int{2, 1} {
-		if len(cards) == 0 {
-			break
-		}
-		shown := cards
-		if ask < len(cards) {
-			shown = cards[:ask]
+	var attempts []attempt
+	if len(tasks) > 0 {
+		taskQuestions := renderTaskQuestions(tasks)
+		attempts = append(attempts,
+			attempt{cards: section("## 进行中的任务", renderTasks(tasks, cardDetailFull)), questions: taskQuestions},
+			attempt{cards: section("## 进行中的任务", renderTasks(tasks, cardDetailLean)), questions: taskQuestions, truncated: true},
+		)
+		for _, ask := range []int{2, 1} {
+			if len(tasks) == 0 {
+				break
+			}
+			shown := tasks
+			if ask < len(tasks) {
+				shown = tasks[:ask]
+			}
+			attempts = append(attempts, attempt{
+				cards:     section("## 进行中的任务", renderTasks(shown, cardDetailLean)),
+				questions: renderTaskQuestions(shown),
+				truncated: true,
+			})
 		}
 		attempts = append(attempts, attempt{
-			cards:     section("## 最近任务", renderCards(shown, cardSessions, cardDetailLean)),
-			questions: renderQuestions(shown),
+			cards:     section("## 进行中的任务", ""),
+			questions: "## 未决问题\n\n（超预算，已省略）\n",
+			truncated: true,
+		})
+	} else {
+		// 没有正式任务时保留旧任务卡，兼容尚未回填/尚未同步的库。
+		full := renderCards(cards, cardSessions, cardDetailFull)
+		lean := renderCards(cards, cardSessions, cardDetailLean)
+		attempts = []attempt{
+			{cards: section("## 最近任务", full), questions: renderQuestions(cards)},
+			{cards: section("## 最近任务", lean), questions: renderQuestions(cards), truncated: true},
+		}
+		for _, ask := range []int{2, 1} {
+			if len(cards) == 0 {
+				break
+			}
+			shown := cards
+			if ask < len(cards) {
+				shown = cards[:ask]
+			}
+			attempts = append(attempts, attempt{
+				cards:     section("## 最近任务", renderCards(shown, cardSessions, cardDetailLean)),
+				questions: renderQuestions(shown),
+				truncated: true,
+			})
+		}
+		attempts = append(attempts, attempt{
+			cards:     section("## 最近任务", ""),
+			questions: "## 未决问题\n\n（超预算，已省略）\n",
 			truncated: true,
 		})
 	}
-	attempts = append(attempts, attempt{
-		cards:     section("## 最近任务", ""),
-		questions: "## 未决问题\n\n（超预算，已省略）\n",
-		truncated: true,
-	})
 
 	var (
 		body      string
@@ -157,6 +192,7 @@ func (c *Composer) Render(ctx context.Context, projectID int64) (Result, error) 
 			renderOverviewCompact(project),
 			renderListCompact("## 用户偏好", userItems),
 			renderListCompact("## 项目硬约束与约定", projectItems),
+			renderTasksCompact(tasks),
 			renderEntryCompact(),
 		}, "\n")
 		truncated = true
@@ -260,6 +296,85 @@ func renderCards(cards []domain.TaskCard, sessions map[int64]domain.Session, lev
 		b.WriteString("\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func renderTasks(tasks []domain.Task, level detailLevel) string {
+	var b strings.Builder
+	for i, task := range tasks {
+		done := 0
+		current := ""
+		for _, step := range task.Steps {
+			if step.Status == domain.StepDone || step.Status == domain.StepSkipped {
+				done++
+			}
+			if current == "" && (step.Status == domain.StepDoing || step.Status == domain.StepPending) {
+				current = step.Subject
+			}
+		}
+		fmt.Fprintf(&b, "### %d. %s\n", i+1, oneLine(task.Goal))
+		fmt.Fprintf(&b, "- 状态: %s ｜ owner: %s ｜ 步骤: %d/%d", task.Status, task.OwnerAgent, done, len(task.Steps))
+		if current != "" {
+			fmt.Fprintf(&b, " ｜ 当前: %s", oneLine(current))
+		}
+		b.WriteString("\n")
+		if task.NextSteps != "" {
+			fmt.Fprintf(&b, "- 下一步: %s\n", oneLine(task.NextSteps))
+		}
+		if level == cardDetailFull && len(task.Files) > 0 {
+			fmt.Fprintf(&b, "- 改动文件: %s\n", strings.Join(head(task.Files, 8), ", "))
+		}
+		if len(task.Commands) > 0 {
+			fmt.Fprintf(&b, "- 执行命令: %s\n", strings.Join(head(task.Commands, 4), " && "))
+		}
+		if len(task.Errors) > 0 {
+			fmt.Fprintf(&b, "- 未解决报错: %s\n", oneLine(task.Errors[0]))
+		}
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func renderTasksCompact(tasks []domain.Task) string {
+	if len(tasks) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## 进行中的任务\n\n")
+	for _, task := range tasks {
+		fmt.Fprintf(&b, "- [%s] %s", task.Status, oneLine(task.Goal))
+		if task.NextSteps != "" {
+			fmt.Fprintf(&b, " — 下一步: %s", clipPlain(task.NextSteps, 120))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func clipPlain(s string, n int) string {
+	line := oneLine(s)
+	r := []rune(line)
+	if len(r) <= n {
+		return line
+	}
+	if n <= 0 {
+		return ""
+	}
+	return string(r[:n-1]) + "…"
+}
+
+func renderTaskQuestions(tasks []domain.Task) string {
+	var qs []string
+	for _, task := range tasks {
+		if task.OpenQuestions == "" {
+			continue
+		}
+		for _, q := range strings.Split(task.OpenQuestions, " / ") {
+			if q = strings.TrimSpace(q); q != "" {
+				qs = append(qs, fmt.Sprintf("- [%s] %s", task.Status, oneLine(q)))
+			}
+		}
+	}
+	return section("## 未决问题", strings.Join(qs, "\n"))
 }
 
 func renderQuestions(cards []domain.TaskCard) string {

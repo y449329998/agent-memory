@@ -379,3 +379,29 @@ func TestRender_UsesExtractorRulesEndToEnd(t *testing.T) {
 		t.Fatalf("extracted goal missing from brief:\n%s", res.Body)
 	}
 }
+
+func TestRenderIncludesFormalTaskSteps(t *testing.T) {
+	f := newFixture(t)
+	now := time.Unix(1700000000, 0)
+	_, err := f.st.CreateTask(f.ctx, domain.Task{
+		ProjectID: f.projectID, Goal: "实现导出", Status: domain.StatusDoing,
+		OwnerAgent: "qoder", NextSteps: "补测试",
+		CreatedAt: now, UpdatedAt: now,
+		Steps: []domain.TaskStep{
+			{Subject: "写接口", Status: domain.StepDone},
+			{Subject: "补测试", Status: domain.StepDoing},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := New(f.st, Config{}).Render(f.ctx, f.projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"## 进行中的任务", "实现导出", "1/2", "补测试", "owner: qoder"} {
+		if !strings.Contains(res.Body, want) {
+			t.Fatalf("handoff missing %q:\n%s", want, res.Body)
+		}
+	}
+}

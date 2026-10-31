@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -106,8 +107,13 @@ func Open(path string) (*Store, error) {
 		}
 	}
 
+	st := &Store{db: db, path: path}
+	if err := st.BackfillTasks(context.Background()); err != nil {
+		return fail(err)
+	}
+
 	secureDBFiles(path)
-	return &Store{db: db, path: path}, nil
+	return st, nil
 }
 
 // secureDBFiles 尽力把库文件收紧到 0600。-wal/-shm 可能尚未创建，Windows 上的

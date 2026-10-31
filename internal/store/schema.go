@@ -149,6 +149,62 @@ CREATE TABLE IF NOT EXISTS agent_link (
   UNIQUE(project_id, agent)
 );
 
+CREATE TABLE IF NOT EXISTS task (
+  id                  INTEGER PRIMARY KEY,
+  project_id          INTEGER NOT NULL DEFAULT 0,
+  goal                TEXT NOT NULL DEFAULT '',
+  status              TEXT NOT NULL DEFAULT 'doing',
+  owner_agent         TEXT NOT NULL DEFAULT '',
+  claimed_at          INTEGER NOT NULL DEFAULT 0,
+  next_steps          TEXT NOT NULL DEFAULT '',
+  decisions_json      TEXT NOT NULL DEFAULT '[]',
+  files_json          TEXT NOT NULL DEFAULT '[]',
+  commands_json       TEXT NOT NULL DEFAULT '[]',
+  errors_json         TEXT NOT NULL DEFAULT '[]',
+  open_questions      TEXT NOT NULL DEFAULT '',
+  source_agent        TEXT NOT NULL DEFAULT '',
+  source_path         TEXT NOT NULL DEFAULT '',
+  manual_edited_at    INTEGER NOT NULL DEFAULT 0,
+  completed_at        INTEGER NOT NULL DEFAULT 0,
+  archived_at         INTEGER NOT NULL DEFAULT 0,
+  merged_into_task_id INTEGER NOT NULL DEFAULT 0,
+  created_at          INTEGER NOT NULL,
+  updated_at          INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS task_step (
+  id          INTEGER PRIMARY KEY,
+  task_id     INTEGER NOT NULL REFERENCES task(id) ON DELETE CASCADE,
+  seq         INTEGER NOT NULL,
+  subject     TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  active_form TEXT NOT NULL DEFAULT '',
+  status      TEXT NOT NULL DEFAULT 'pending',
+  source_key  TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  UNIQUE(task_id, seq)
+);
+
+CREATE TABLE IF NOT EXISTS task_snippet (
+  id      INTEGER PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES task(id) ON DELETE CASCADE,
+  seq     INTEGER NOT NULL,
+  role    TEXT NOT NULL DEFAULT '',
+  kind    TEXT NOT NULL DEFAULT '',
+  text    TEXT NOT NULL DEFAULT '',
+  ts      INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(task_id, seq)
+);
+
+CREATE TABLE IF NOT EXISTS task_session (
+  task_id    INTEGER NOT NULL REFERENCES task(id) ON DELETE CASCADE,
+  session_id INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+  role       TEXT NOT NULL DEFAULT 'source',
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(task_id, session_id)
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
   text_seg,
   tokenize = 'unicode61'
@@ -159,6 +215,10 @@ CREATE INDEX IF NOT EXISTS idx_memory_source_agent ON memory_source(agent);
 CREATE INDEX IF NOT EXISTS idx_memory_item_project ON memory_item(project_id, stale);
 CREATE INDEX IF NOT EXISTS idx_session_project ON session(project_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_task_card_project ON task_card(project_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_task_project ON task(project_id, archived_at, status);
+CREATE INDEX IF NOT EXISTS idx_task_owner ON task(owner_agent, status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_step_source ON task_step(task_id, source_key) WHERE source_key <> '';
+CREATE INDEX IF NOT EXISTS idx_task_snippet_task ON task_snippet(task_id, seq);
 `
 
 const schemaVersion = "1"

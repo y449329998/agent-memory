@@ -174,6 +174,15 @@ func (a stubAPI) Tasks(ctx context.Context, in TaskInput) (any, error) {
 func (a stubAPI) TaskGet(ctx context.Context, id int64) (any, error) {
 	return map[string]any{"id": id}, nil
 }
+func (a stubAPI) AddTask(ctx context.Context, in AddTaskInput) (any, error) {
+	return map[string]any{"id": 1}, nil
+}
+func (a stubAPI) UpdateTask(ctx context.Context, in UpdateTaskInput) (any, error) {
+	return map[string]any{"id": in.ID}, nil
+}
+func (a stubAPI) ExportTask(ctx context.Context, id int64) (any, error) {
+	return map[string]any{"markdown": "task_id: 1"}, nil
+}
 func (a stubAPI) ResolveProject(ctx context.Context, path string) (any, error) {
 	return map[string]any{"known": false}, nil
 }

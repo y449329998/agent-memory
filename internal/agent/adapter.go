@@ -33,7 +33,17 @@ type SessionUnit struct {
 	// Session 的 ProjectPath/ProjectSlug/Confidence 由适配器填；ProjectID 由 ingest 解析。
 	Session domain.Session
 	Events  []SessionEvent
+	Steps   []TaskStepDraft
 	Err     error
+}
+
+// TaskStepDraft 是适配器从 agent 任务清单里读出的步骤，任务归属由 ingest 处理。
+type TaskStepDraft struct {
+	SourceKey   string
+	Subject     string
+	Description string
+	ActiveForm  string
+	Status      string
 }
 
 // SessionEvent 是适配器产出的会话事件，与 domain.SessionEvent 同构但不带 SessionID：

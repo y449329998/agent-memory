@@ -836,3 +836,42 @@ func TestRun_AliasResolvesLowConfidenceSlug(t *testing.T) {
 		t.Fatalf("alias slug must not create its own project, got %d", got)
 	}
 }
+
+type taskAdapter struct{ units []agent.SessionUnit }
+
+func (a taskAdapter) Name() string { return "workbuddy" }
+func (a taskAdapter) ScanMemoryUnits(context.Context) ([]agent.MemoryUnit, error) {
+	return nil, nil
+}
+func (a taskAdapter) ScanSessionUnits(context.Context) ([]agent.SessionUnit, error) {
+	return a.units, nil
+}
+
+func TestRun_CreatesFormalTaskAndWorkBuddySteps(t *testing.T) {
+	s := openTempStore(t)
+	repo := t.TempDir()
+	now := time.Now()
+	u := agent.SessionUnit{
+		Path: filepath.Join(t.TempDir(), "s.jsonl"),
+		Session: domain.Session{
+			Agent: "workbuddy", ExternalID: "s1", Title: "实现导出",
+			ProjectPath: repo, Confidence: "high", UpdatedAt: now,
+		},
+		Steps: []agent.TaskStepDraft{
+			{SourceKey: "1", Subject: "写接口", Status: domain.StepDone},
+			{SourceKey: "2", Subject: "补测试", Status: domain.StepDoing},
+		},
+	}
+	r := New(s, taskAdapter{units: []agent.SessionUnit{u}})
+	r.SettleIdle = time.Nanosecond
+	if _, err := r.Run(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := s.ListTasks(context.Background(), store.TaskFilter{Limit: 10})
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("tasks=%+v err=%v", tasks, err)
+	}
+	if tasks[0].Goal != "实现导出" || len(tasks[0].Steps) != 2 {
+		t.Fatalf("task = %+v", tasks[0])
+	}
+}

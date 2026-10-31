@@ -715,6 +715,17 @@ html[data-theme="light"] .md pre { background: rgba(15, 23, 42, 0.045); }
 .md-clamp.entry-md { max-height: 132px; }
 .md-clamp.open { max-height: none; -webkit-mask-image: none; mask-image: none; }
 .md-more { margin-top: 8px; }
+.field[hidden] { display: none; }
+.step-list { display: grid; gap: 8px; }
+.step-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) 140px 32px; gap: 8px; align-items: center; }
+.step-row input[type="text"], .step-row select { width: 100%; }
+.step-remove { color: var(--danger); background: transparent; border: 0; cursor: pointer; font-size: 18px; }
+.task-link { font-family: var(--display); font-size: 17px; color: var(--text); text-decoration: none; }
+.task-link:hover { color: var(--accent); }
+.snippet { border-bottom: 1px solid var(--stroke); padding: 8px 0; }
+.snippet:last-child { border-bottom: 0; }
+.task-next-preview { min-height: 120px; max-height: 220px; }
+@media (max-width: 980px) { .step-row { grid-template-columns: 24px minmax(0, 1fr) 110px 28px; } }
 
 .sources { list-style: none; margin: 8px 0 0; padding: 0; }
 .src-row { display: grid; grid-template-columns: 88px minmax(0, 1fr) auto auto; gap: 14px; align-items: baseline; padding: 11px 6px; border-bottom: 1px solid var(--stroke); border-radius: 8px; transition: background 0.16s ease; }

@@ -226,6 +226,24 @@ func (r *Runner) Run(ctx context.Context, onlyAgent string) (Result, error) {
 				} else if added {
 					res.Cards++
 				}
+				if sessID, ok, err := r.store.SessionIDByExternal(ctx, a.Name(), u.Session.ExternalID); err != nil {
+					res.Errors = append(res.Errors, fmt.Sprintf("%s: task: %v", u.Path, err))
+				} else if ok {
+					var card *domain.TaskCard
+					if c, err := r.store.TaskCardBySession(ctx, sessID); err == nil {
+						card = &c
+					} else if !errors.Is(err, sql.ErrNoRows) {
+						res.Errors = append(res.Errors, fmt.Sprintf("%s: task card: %v", u.Path, err))
+					}
+					sess, found, err := r.store.SessionByID(ctx, sessID)
+					if err != nil {
+						res.Errors = append(res.Errors, fmt.Sprintf("%s: task session: %v", u.Path, err))
+					} else if found {
+						if err := r.syncTaskFromSession(ctx, a.Name(), sess, sessID, card, u.Steps, time.Now()); err != nil {
+							res.Errors = append(res.Errors, fmt.Sprintf("%s: task: %v", u.Path, err))
+						}
+					}
+				}
 				continue
 			}
 
@@ -254,19 +272,24 @@ func (r *Runner) Run(ctx context.Context, onlyAgent string) (Result, error) {
 			}
 
 			// 是否出卡只看源文件 mtime：还在写的会话只导入事件，等下一轮再提炼。
+			var card *domain.TaskCard
 			if extract.Settled(u.MTime, time.Now(), r.SettleIdle) {
-				card, ok := extract.TaskCard(sess, events, time.Now())
+				extracted, ok := extract.TaskCard(sess, events, time.Now())
 				if ok {
-					card.SessionID = sessID
-					card.ProjectID = projectID
-					if _, err := r.store.UpsertTaskCard(ctx, card); err != nil {
+					extracted.SessionID = sessID
+					extracted.ProjectID = projectID
+					if _, err := r.store.UpsertTaskCard(ctx, extracted); err != nil {
 						res.Errors = append(res.Errors, fmt.Sprintf("%s: card: %v", u.Path, err))
 					} else {
+						card = &extracted
 						res.Cards++
 					}
 				}
 			} else {
 				res.SkippedUnsettled++
+			}
+			if err := r.syncTaskFromSession(ctx, a.Name(), sess, sessID, card, u.Steps, time.Now()); err != nil {
+				res.Errors = append(res.Errors, fmt.Sprintf("%s: task: %v", u.Path, err))
 			}
 
 			if err := r.store.PutSource(ctx, domain.SourceState{
@@ -279,6 +302,10 @@ func (r *Runner) Run(ctx context.Context, onlyAgent string) (Result, error) {
 	}
 
 	// 全部适配器跑完后再统一判定：每个 agent 单独判一次会误伤共同支撑的条目。
+	now := time.Now()
+	if _, err := r.store.ArchiveCompletedTasks(ctx, now.Add(-30*24*time.Hour), now); err != nil {
+		res.Errors = append(res.Errors, fmt.Sprintf("task archive: %v", err))
+	}
 	n, err := r.store.MarkStaleForRun(ctx, scanned, runAt)
 	if err != nil {
 		return res, err
