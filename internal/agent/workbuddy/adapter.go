@@ -45,8 +45,8 @@ func (a *Adapter) Name() string { return "workbuddy" }
 // 这个 agent 只靠 30 秒轮询兜底。
 func (a *Adapter) WatchDirs() []string { return nil }
 
-// ScanSessionUnits: WorkBuddy 的对话落在 ~/.workbuddy/projects/<项目>/<会话>.jsonl，
-// 只导入带有 TodoWrite 清单（tasks/<会话>/）的会话；没有任务清单的闲聊不产生任务卡。
+// ScanSessionUnits: WorkBuddy 的对话落在 ~/.workbuddy/projects/<项目>/<会话>.jsonl。
+// 带 TodoWrite 清单的会话全部导入；没有清单的只导入最近 30 天，用来覆盖 WorkBuddy 侧栏的近期任务。
 func (a *Adapter) ScanSessionUnits(ctx context.Context) ([]agent.SessionUnit, error) {
 	return a.scanSessions(ctx)
 }

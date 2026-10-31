@@ -237,10 +237,15 @@ func TestScanSessionsSkipsSessionsWithoutTasksOrCwd(t *testing.T) {
 		fmt.Sprintf(`{"type":"message","role":"user","timestamp":1790000000000,"cwd":%q,"content":[{"type":"input_text","text":"目标"}]}`, goneCwd)+"\n")
 	mustMkdirAll(t, filepath.Join(home, "tasks", gone))
 
-	// 没有任务清单的会话：不导入。
+	// 超过 30 天且没有任务清单的会话：不导入。
 	noTasks := "aaaaaaaa-0000-0000-0000-000000000003"
-	writeFile(t, filepath.Join(home, "projects", "demo", noTasks+".jsonl"),
+	noTasksPath := filepath.Join(home, "projects", "demo", noTasks+".jsonl")
+	writeFile(t, noTasksPath,
 		fmt.Sprintf(`{"type":"message","role":"user","timestamp":1790000000000,"cwd":%q,"content":[{"type":"input_text","text":"闲聊"}]}`, live)+"\n")
+	old := time.Now().Add(-31 * 24 * time.Hour)
+	if err := os.Chtimes(noTasksPath, old, old); err != nil {
+		t.Fatal(err)
+	}
 
 	units, err := New(home).ScanSessionUnits(context.Background())
 	if err != nil {
@@ -275,5 +280,22 @@ func TestScanSessionsImportsTodoSteps(t *testing.T) {
 	}
 	if steps[1].SourceKey != "2" || steps[1].Status != "doing" {
 		t.Fatalf("step 1 = %+v", steps[1])
+	}
+}
+
+func TestScanSessionsImportsRecentSessionWithoutTasks(t *testing.T) {
+	home := filepath.Join(t.TempDir(), ".workbuddy")
+	cwd := t.TempDir()
+	id := "cccccccc-0000-0000-0000-000000000001"
+	writeFile(t, filepath.Join(home, "projects", "demo", id+".jsonl"),
+		fmt.Sprintf(`{"type":"ai-title","timestamp":1790000000000,"aiTitle":"最近的任务","cwd":%q}`+"\n"+
+			`{"type":"message","role":"user","timestamp":1790000001000,"content":[{"type":"input_text","text":"继续完成导出"}]}`+"\n", cwd))
+
+	units, err := New(home).ScanSessionUnits(context.Background())
+	if err != nil || len(units) != 1 {
+		t.Fatalf("scan: %v %+v", err, units)
+	}
+	if units[0].Session.Title != "最近的任务" || len(units[0].Steps) != 0 {
+		t.Fatalf("unit = %+v", units[0])
 	}
 }

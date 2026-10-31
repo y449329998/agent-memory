@@ -25,6 +25,9 @@ const (
 	wbMaxTitleRunes = 80
 	// 技能正文与工具说明会作为 user 消息灌进来，真实目标陈述极少超过这个长度。
 	wbInjectionRunes = 4000
+	// 没有 TodoWrite 清单的 WorkBuddy 会话只导入最近这段时间的，避免把
+	// 历史里几百场闲聊全部变成任务。
+	wbRecentSessionWindow = 30 * 24 * time.Hour
 )
 
 // sessionLine 是 projects/*.jsonl 的行结构。消息的 content 既可能是字符串，
@@ -48,8 +51,9 @@ type contentBlock struct {
 	Text string `json:"text"`
 }
 
-// scanSessions 只导入带 TodoWrite 清单的会话：WorkBuddy 的 projects/ 有三百多 MB，
-// 没有任务清单的闲聊既没有交接价值，也不该让每轮扫描都去读它们。
+// scanSessions 导入带 TodoWrite 清单的会话，以及最近 30 天没有清单的会话：
+// 前者用来生成完整步骤，后者覆盖 WorkBuddy 侧栏里的近期任务/对话。
+// 更老的闲聊不导入，避免把几百场历史会话全部变成任务。
 //
 // 解析过的文件按 mtime+size 缓存在内存里，内容未变时只返回哈希、会话元数据
 // 与已解析事件，既避免 30 秒轮询反复读大文件，也避免把整份原文留在内存里。
@@ -89,12 +93,13 @@ func (a *Adapter) scanSessions(ctx context.Context) ([]agent.SessionUnit, error)
 				return out, err
 			}
 			externalID := strings.TrimSuffix(filepath.Base(f), ".jsonl")
-			if !dirExists(filepath.Join(a.Home, "tasks", externalID)) {
-				continue
-			}
 			st, err := os.Stat(f)
 			if err != nil {
 				out = append(out, agent.SessionUnit{Path: f, Err: err})
+				continue
+			}
+			if !dirExists(filepath.Join(a.Home, "tasks", externalID)) &&
+				time.Since(st.ModTime()) > wbRecentSessionWindow {
 				continue
 			}
 			if e, ok := a.cachedSession(f, st.Size(), st.ModTime()); ok {

@@ -53,7 +53,7 @@ go build -ldflags "-H windowsgui" -o agent-memory-app.exe ./cmd/agent-memory-app
 ./agent-memory.exe link qoder --project .             # 真正接入
 ```
 
-`scan` 按 qoder → trae → workbuddy 的固定顺序读三家：Qoder 读 `~/.qoder-cn/memory`、`projects/*/memory` 与会话 jsonl；Trae 读 `~/.trae-cn/memory`（含 `projects/<项目>/project_memory.md`）与 `user_rules/`，并用 `%APPDATA%\Trae CN\User\workspaceStorage` 把项目目录名映射回真实路径；WorkBuddy 读 `~/.workbuddy/MEMORY.md`，并导入 `projects/<项目>/<会话>.jsonl` 里带任务清单（`tasks/<会话>/`）的本地会话，用来生成任务卡。Trae 的会话正文在云端，`state.vscdb` 只有界面状态，因此只导入记忆。
+`scan` 按 qoder → trae → workbuddy 的固定顺序读三家：Qoder 读 `~/.qoder-cn/memory`、`projects/*/memory` 与会话 jsonl；Trae 读 `~/.trae-cn/memory`（含 `projects/<项目>/project_memory.md`）与 `user_rules/`，并用 `%APPDATA%\Trae CN\User\workspaceStorage` 把项目目录名映射回真实路径；WorkBuddy 读 `~/.workbuddy/MEMORY.md`，并导入 `projects/<项目>/<会话>.jsonl`：带任务清单（`tasks/<会话>/`）的会话导入完整步骤，没有清单的只导入最近 30 天，用来覆盖 WorkBuddy 侧栏的近期任务。Trae 的会话正文在云端，`state.vscdb` 只有界面状态，因此只导入记忆。
 
 浏览器打开 `http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>` 即 Web UI。
 
@@ -514,7 +514,7 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 - 检索是字面二元组，跨标点短语会漏（见第 8 节）
 - 纯「删除文件 → 用完全相同内容恢复」若从未观察到读错误，条目会一直 stale（`scan --full` 或 `memory purge` 可处理）
 - `last_seen_at` 语义是「最后变更」而非「最后见到」
-- Trae 只有记忆、没有本地会话：Trae 读 `memory/`、`memory/projects/*/project_memory.md` 与 `user_rules/`，会话正文在云端，`state.vscdb` 只有界面状态，所以不产生任务；WorkBuddy 除 `~/.workbuddy/MEMORY.md` 外，还导入带任务清单的 `projects/*.jsonl` 会话与 `tasks/` 步骤；两者不接 MCP，靠项目里的 `HANDOFF.md` 读取共享记忆
+- Trae 只有记忆、没有本地会话：Trae 读 `memory/`、`memory/projects/*/project_memory.md` 与 `user_rules/`，会话正文在云端，`state.vscdb` 只有界面状态，所以不产生任务；WorkBuddy 除 `~/.workbuddy/MEMORY.md` 外，还导入 `projects/*.jsonl` 会话：带 `tasks/` 的导入完整步骤和全部历史，没有清单的只导入最近 30 天；两者不接 MCP，靠项目里的 `HANDOFF.md` 读取共享记忆
 - WorkBuddy 不参与文件监听（`~/.workbuddy` 根目录有大量应用缓存，监听会放大事件量），记忆、会话与任务清单的变化由 30 秒轮询兜底；Trae 只监听 `memory/` 与 `user_rules/`，`workspaceStorage` 的变化不触发扫描
 - OpenCode 的会话/记忆与 Trae 的云端会话尚未接入
 - `git worktree` / submodule 的 `.git` 是文件，目前读不到 remote，会退化为路径 key
