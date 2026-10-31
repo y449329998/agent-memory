@@ -187,8 +187,8 @@ CREATE TABLE IF NOT EXISTS task_session (
 
 ### 7.3 自动同步规则
 
-- `manual_edited_at = 0` 时，扫描可更新任务目标、状态、下一步、决策、文件、命令、报错、未决问题、步骤和片段。
-- `manual_edited_at > 0` 时，只新增 `task_session` 关联，不覆盖任务、步骤和片段。
+- `manual_edited_at = 0` 时，扫描可更新任务目标、状态、下一步、决策、文件、命令、报错、未决问题与步骤。
+- `manual_edited_at > 0` 时，只新增 `task_session` 关联，不覆盖任务字段与步骤；片段属于只读派生数据，仍按所有关联会话刷新最近 20 条。
 - 状态推导：
   - 有摘要卡：使用摘要卡状态。
   - 无摘要卡但有步骤：任一 `blocked` -> `blocked`；全部为 `done` 或 `skipped` 且至少一步 -> `done`；否则 `doing`。
@@ -222,6 +222,7 @@ CREATE TABLE IF NOT EXISTS task_session (
 - 新表随现有 schema 一起 `CREATE TABLE IF NOT EXISTS`，不提升 `schemaVersion`，旧库直接启动。
 - `meta` 增加一次性标记 `task_backfill_v1`。
 - 首次打开新版本时，在事务中把现有 `task_card` 回填为正式任务：
+  - 任务 `id` 直接使用对应 `task_card.id`，保证旧 `task_get` id 继续可用；后续新任务使用自增 id。
   - 复制目标、状态、决策、文件、命令、报错、未决问题、下一步。
   - 通过 `task_card.session_id` 创建 `task_session`。
   - 从 `session_event` 回填最近 20 条片段。
