@@ -847,7 +847,7 @@ func (a taskAdapter) ScanSessionUnits(context.Context) ([]agent.SessionUnit, err
 	return a.units, nil
 }
 
-func TestRun_CreatesFormalTaskAndWorkBuddySteps(t *testing.T) {
+func TestRun_CreatesSessionTaskWithSteps(t *testing.T) {
 	s := openTempStore(t)
 	repo := t.TempDir()
 	now := time.Now()
@@ -873,5 +873,109 @@ func TestRun_CreatesFormalTaskAndWorkBuddySteps(t *testing.T) {
 	}
 	if tasks[0].Goal != "实现导出" || len(tasks[0].Steps) != 2 {
 		t.Fatalf("task = %+v", tasks[0])
+	}
+	if tasks[0].Kind != domain.TaskKindSession || tasks[0].SessionID == 0 {
+		t.Fatalf("会话应产出对话任务，得到 kind=%q session=%d", tasks[0].Kind, tasks[0].SessionID)
+	}
+	if _, ok, err := s.TaskByKindSession(context.Background(), tasks[0].SessionID); err != nil || !ok {
+		t.Fatalf("按会话回查对话任务 ok=%v err=%v", ok, err)
+	}
+}
+
+// 两次对话必须各自成一条任务：旧行为会把它们折叠进同项目的进行中任务，
+// 导致「哪个 agent 的哪次对话做了什么」在任务页上彻底看不出来。
+func TestRun_KeepsTwoConversationsAsTwoTasks(t *testing.T) {
+	s := openTempStore(t)
+	repo := t.TempDir()
+	now := time.Now()
+	mk := func(id, title string) agent.SessionUnit {
+		return agent.SessionUnit{
+			Path: filepath.Join(t.TempDir(), id+".jsonl"),
+			Session: domain.Session{
+				Agent: "workbuddy", ExternalID: id, Title: title,
+				ProjectPath: repo, Confidence: "high", UpdatedAt: now,
+			},
+			Steps: []agent.TaskStepDraft{{SourceKey: "1", Subject: title + " 的第一步", Status: domain.StepDoing}},
+		}
+	}
+	r := New(s, taskAdapter{units: []agent.SessionUnit{mk("s1", "任务甲"), mk("s2", "任务乙")}})
+	r.SettleIdle = time.Nanosecond
+	if _, err := r.Run(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := s.ListTasks(context.Background(), store.TaskFilter{
+		Kind: domain.TaskKindSession, Limit: 10,
+	})
+	if err != nil || len(tasks) != 2 {
+		t.Fatalf("期望两条对话任务，得到 %d 条 err=%v", len(tasks), err)
+	}
+	if tasks[0].SessionID == tasks[1].SessionID {
+		t.Fatalf("两条任务绑到了同一个会话：%+v", tasks)
+	}
+}
+
+func TestStepsFromCard(t *testing.T) {
+	at := time.Now()
+	card := &domain.TaskCard{
+		Commands:  []string{"go test ./..."},
+		Files:     []string{"internal/store/task.go"},
+		NextSteps: "- 补迁移测试\n* 更新文档",
+		Errors:    []string{"sqlite: no such column"},
+	}
+	steps := stepsFromCard(card, at)
+	if len(steps) != 5 {
+		t.Fatalf("steps=%+v", steps)
+	}
+	if steps[0].Subject != "执行 go test ./..." || steps[0].Status != domain.StepDone {
+		t.Fatalf("命令应记成已完成步骤：%+v", steps[0])
+	}
+	if steps[3].Subject != "补迁移测试" || steps[3].Status != domain.StepPending {
+		t.Fatalf("下一步应记成待办且去掉列表符号：%+v", steps[3])
+	}
+	if steps[2].Status != domain.StepBlocked {
+		t.Fatalf("报错应记成受阻：%+v", steps[2])
+	}
+	seen := map[string]bool{}
+	for _, s := range steps {
+		if s.SourceKey == "" || seen[s.SourceKey] {
+			t.Fatalf("步骤 source_key 必须唯一且非空：%+v", steps)
+		}
+		seen[s.SourceKey] = true
+	}
+	if stepsFromCard(nil, at) != nil {
+		t.Fatal("没有卡片时不应凭空造步骤")
+	}
+}
+
+func TestRun_QueuesTaskSummaryOnlyWhenEnabled(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		s := openTempStore(t)
+		repo := t.TempDir()
+		now := time.Now()
+		u := agent.SessionUnit{
+			Path: filepath.Join(t.TempDir(), "s.jsonl"),
+			Session: domain.Session{
+				Agent: "workbuddy", ExternalID: "s-" + fmt.Sprint(enabled), Title: "摘要门控",
+				ProjectPath: repo, Confidence: "high", UpdatedAt: now,
+			},
+			Steps: []agent.TaskStepDraft{{SourceKey: "1", Subject: "做点什么", Status: domain.StepDoing}},
+		}
+		r := New(s, taskAdapter{units: []agent.SessionUnit{u}})
+		r.SettleIdle = time.Nanosecond
+		r.Summarize = enabled
+		if _, err := r.Run(context.Background(), ""); err != nil {
+			t.Fatal(err)
+		}
+		tasks, err := s.ListTasks(context.Background(), store.TaskFilter{Limit: 10})
+		if err != nil || len(tasks) != 1 {
+			t.Fatalf("enabled=%v tasks=%+v err=%v", enabled, tasks, err)
+		}
+		row, ok, err := s.SummaryFor(context.Background(), "task", tasks[0].ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if enabled != ok || (enabled && row.State != "pending") {
+			t.Fatalf("enabled=%v summary ok=%v row=%+v", enabled, ok, row)
+		}
 	}
 }

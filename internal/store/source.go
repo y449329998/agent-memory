@@ -217,6 +217,7 @@ func (s *Store) Stats(ctx context.Context) (domain.Stats, error) {
 		{`SELECT count(*) FROM memory_item WHERE stale = 1`, &st.Stale},
 		{`SELECT count(*) FROM source`, &st.Sources},
 		{`SELECT count(*) FROM source WHERE last_error <> ''`, &st.FailedSource},
+		{`SELECT count(*) FROM task WHERE archived_at = 0`, &st.Tasks},
 		{`SELECT count(*) FROM source WHERE changed_at <> 0`, &st.Changed},
 	}
 	for _, sc := range scalars {

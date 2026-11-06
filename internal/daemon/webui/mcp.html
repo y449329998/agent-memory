@@ -1,0 +1,96 @@
+{{define "content"}}
+<nav class="crumbs" aria-label="面包屑"><a href="/">总览</a><span class="sep">/</span><span>MCP 接驳台</span></nav>
+
+<header class="dock-head">
+  <div class="dock-intro">
+    <p class="kicker">MCP DOCK · 本机接驳台</p>
+    <h1 class="display-sm dock-title">让每个 agent<br><span class="accent">接上同一份记忆</span></h1>
+    <p class="lede">选一个客户端，复制配置，重启它。端口、令牌与启动路径都由服务实时生成，不需要手写。</p>
+    <div id="mcp-verified" class="verify-chips" aria-live="polite"></div>
+  </div>
+  <aside class="dock-live" aria-label="当前服务">
+    <div class="dock-live-head">
+      <span class="live-pulse" aria-hidden="true"></span>
+      <span id="mcp-status" class="dock-status">连接中…</span>
+      <span class="dock-transport">STDIO / LOOPBACK</span>
+    </div>
+    <div class="dock-port">
+      <span class="dock-label">LISTENING PORT</span>
+      <strong id="mcp-port">—</strong>
+      <span class="dock-host">127.0.0.1</span>
+    </div>
+    <dl class="dock-spec">
+      <div><dt>启动程序</dt><dd id="mcp-binary">—</dd></div>
+      <div><dt>访问令牌</dt><dd id="mcp-token" class="mono">—</dd></div>
+    </dl>
+  </aside>
+</header>
+
+<section class="section" aria-label="配置矩阵">
+  <div class="section-head">
+    <span class="no">02</span><h2>配置矩阵</h2>
+    <span class="meta">配置只写入客户端，不改共享库</span>
+  </div>
+  <div class="dock-workbench">
+    <div class="dock-rail" id="mcp-tabs" role="tablist" aria-label="选择客户端">
+      <button class="dock-client" data-tab="qoder" type="button" role="tab" aria-selected="true">
+        <span class="dc-index">01</span>
+        <span class="dc-main"><b>Qoder</b><small>mcp.json</small></span>
+        <span class="dc-state">已验证</span>
+      </button>
+      <button class="dock-client" data-tab="opencode" type="button" role="tab" aria-selected="false">
+        <span class="dc-index">02</span>
+        <span class="dc-main"><b>OpenCode</b><small>opencode.json</small></span>
+        <span class="dc-state">已验证</span>
+      </button>
+      <button class="dock-client" data-tab="claude" type="button" role="tab" aria-selected="false">
+        <span class="dc-index">03</span>
+        <span class="dc-main"><b>Claude Code</b><small>~/.claude.json</small></span>
+        <span class="dc-state">已验证</span>
+      </button>
+      <button class="dock-client" data-tab="generic" type="button" role="tab" aria-selected="false">
+        <span class="dc-index">04</span>
+        <span class="dc-main"><b>通用 stdio</b><small>任意 MCP 客户端</small></span>
+        <span class="dc-state template">模板</span>
+      </button>
+    </div>
+    <div class="dock-console">
+      <div class="console-bar">
+        <span class="console-title"><span id="mcp-client-label">Qoder</span><small id="mcp-client-path">~/.qoder-cn/mcp.json</small></span>
+        <button id="mcp-copy" class="stamp small primary" type="button">复制配置</button>
+      </div>
+      <div class="console-body">
+        <div id="mcp-code-gutter" class="console-gutter" aria-hidden="true"></div>
+        <pre id="mcp-code" class="console-code">载入中…</pre>
+      </div>
+      <div class="console-foot">
+        <span><i>transport</i><b>stdio</b></span>
+        <span><i>host</i><b id="mcp-host">—</b></span>
+        <span><i>auth</i><b>Bearer</b></span>
+        <span class="console-note">改端口后回本页重新复制</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" aria-label="接入步骤">
+  <div class="section-head"><span class="no">03</span><h2>三步接上</h2><span class="meta">不需要改共享库，也不需要重启服务</span></div>
+  <div class="flow-grid">
+    <article class="flow-step">
+      <span class="flow-no">01</span>
+      <h3>选客户端</h3>
+      <p>Qoder、OpenCode 与 Claude Code 有已验证模板；Cursor、Codex、DeepSeek 等用通用 stdio 示例改键名。</p>
+    </article>
+    <article class="flow-step">
+      <span class="flow-no">02</span>
+      <h3>复制配置</h3>
+      <p>复制的是当前实际端口和真实令牌。粘贴到对应配置文件，原有的其他 MCP 条目不会被覆盖。</p>
+    </article>
+    <article class="flow-step">
+      <span class="flow-no">03</span>
+      <h3>重启 agent</h3>
+      <p>客户端只在启动时读取 MCP 配置。重启后调用一次 <span class="mono">memory_search</span> 验证连通。</p>
+    </article>
+  </div>
+</section>
+{{end}}

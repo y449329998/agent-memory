@@ -26,7 +26,7 @@ func TestOpen_CreatesAllSpecTables(t *testing.T) {
 	want := []string{
 		"meta", "project", "project_path", "source", "memory_item", "memory_source",
 		"session", "session_event", "task_card", "task", "task_step", "task_snippet",
-		"task_session", "handoff", "agent_link", "memory_fts",
+		"task_session", "handoff", "agent_link", "summary", "memory_fts",
 	}
 	got := map[string]bool{}
 	rows, err := s.db.Query(`SELECT name FROM sqlite_master WHERE type IN ('table','view')`)

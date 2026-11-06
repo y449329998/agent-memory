@@ -90,18 +90,27 @@ func Open(path string) (*Store, error) {
 		return fail(err)
 	}
 	if ok && ver != schemaVersion {
-		db.Close()
 		if versionNewer(ver) {
+			db.Close()
 			return nil, fmt.Errorf("数据库由更新版本的程序创建（schema_version %q > %s），请用新程序或重建", ver, schemaVersion)
 		}
-		return nil, fmt.Errorf("旧版本库（schema_version %q < %s），需重建（scan --full 会重建索引，但不做 schema 升级）", ver, schemaVersion)
+		if ver == "1" {
+			// 1→2 只是给 task 加两列并重新归类，历史数据全部保留。
+			if err := migrateV1(db); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("升级库结构（schema_version 1→2）失败：%w", err)
+			}
+		} else {
+			db.Close()
+			return nil, fmt.Errorf("旧版本库（schema_version %q < %s），需重建（scan --full 会重建索引，但不做 schema 升级）", ver, schemaVersion)
+		}
 	}
 
 	// 版本兼容后才建表，避免把新版本已删除的对象重新建出来。
 	if _, err := db.Exec(schemaSQL); err != nil {
 		return fail(fmt.Errorf("create schema: %w", err))
 	}
-	if !ok {
+	if !ok || ver != schemaVersion {
 		if err := setMeta(db, "schema_version", schemaVersion); err != nil {
 			return fail(err)
 		}

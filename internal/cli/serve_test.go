@@ -16,11 +16,32 @@ import (
 	"github.com/muyi99/agent-memory/internal/agent/qoder"
 	"github.com/muyi99/agent-memory/internal/agent/trae"
 	"github.com/muyi99/agent-memory/internal/agent/workbuddy"
+	"github.com/muyi99/agent-memory/internal/config"
 )
 
 // TestWatchDirs_CollectsWatchableAdaptersInOrder 回归：serve 不再按具体类型断言，
 // 而是收集所有实现 agent.Watchable 的适配器目录，顺序跟随装配顺序；
 // WorkBuddy 返回 nil（根目录缓存太多），不产生监听目录。
+func TestLLMReadyRequiresFullConfig(t *testing.T) {
+	home := t.TempDir()
+	cfg := config.Default(home)
+	if llmReady(cfg) {
+		t.Fatal("disabled llm should not be ready")
+	}
+	cfg.LLM.Enabled = true
+	cfg.LLM.BaseURL = "http://127.0.0.1:11434/v1"
+	cfg.LLM.Model = "qwen"
+	if llmReady(cfg) {
+		t.Fatal("missing key should not be ready")
+	}
+	if err := config.SaveLLMKey(cfg.LLMKeyPath(), "sk-test"); err != nil {
+		t.Fatal(err)
+	}
+	if !llmReady(cfg) {
+		t.Fatal("full config should be ready")
+	}
+}
+
 func TestWatchDirs_CollectsWatchableAdaptersInOrder(t *testing.T) {
 	root := t.TempDir()
 	qoderHome := filepath.Join(root, ".qoder-cn")

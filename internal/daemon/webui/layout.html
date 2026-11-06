@@ -6,6 +6,7 @@
 <meta name="referrer" content="no-referrer">
 <script>try{if(localStorage.getItem("am-theme")==="light")document.documentElement.dataset.theme="light";}catch(e){}</script>
 <title>{{.Title}} · agent-memory</title>
+<link rel="icon" type="image/png" href="/assets/app.png">
 <link rel="stylesheet" href="/assets/app.css">
 <script src="/assets/app.js" defer></script>
 </head>
@@ -14,11 +15,13 @@
 <a class="skip" href="#main">跳到正文</a>
 
 <header class="masthead">
-  <a class="wordmark" href="/"><span class="mark">AM</span><span class="word">agent-memory</span></a>
+  <a class="wordmark" href="/"><img class="mark" src="/assets/app.png" alt="" width="30" height="30"><span class="word">agent-memory</span></a>
   <nav class="nav" aria-label="主导航">
     <a href="/"{{if eq .View "home"}} aria-current="page"{{end}}>总览</a>
     <a href="/memories"{{if eq .View "memories"}} aria-current="page"{{end}}>记忆档案</a>
     <a href="/tasks"{{if eq .View "tasks"}} aria-current="page"{{end}}{{if eq .View "task"}} aria-current="page"{{end}}>任务</a>
+    <a href="/mcp"{{if eq .View "mcp"}} aria-current="page"{{end}}>MCP</a>
+    <a href="/settings"{{if eq .View "settings"}} aria-current="page"{{end}}>设置</a>
     <a href="/sources"{{if eq .View "sources"}} aria-current="page"{{end}}>来源</a>
   </nav>
   <div class="mast-right">

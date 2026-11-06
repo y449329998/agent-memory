@@ -14,8 +14,8 @@ import (
 var webuiFS embed.FS
 
 var webuiPages = func() map[string]*template.Template {
-	pages := make(map[string]*template.Template, 7)
-	for _, name := range []string{"home", "project", "memories", "sources", "edit", "tasks", "task"} {
+	pages := make(map[string]*template.Template, 9)
+	for _, name := range []string{"home", "project", "memories", "sources", "edit", "tasks", "task", "mcp", "settings"} {
 		pages[name] = template.Must(template.ParseFS(webuiFS, "webui/layout.html", "webui/"+name+".html"))
 	}
 	return pages
@@ -70,10 +70,18 @@ func (s *Server) handleTaskPage(w http.ResponseWriter, r *http.Request) {
 	s.renderPage(w, "task", pageData{Title: "任务详情", View: "task", TaskID: r.PathValue("id")})
 }
 
+func (s *Server) handleMCPPage(w http.ResponseWriter, _ *http.Request) {
+	s.renderPage(w, "mcp", pageData{Title: "MCP 接入", View: "mcp"})
+}
+
+func (s *Server) handleSettingsPage(w http.ResponseWriter, _ *http.Request) {
+	s.renderPage(w, "settings", pageData{Title: "设置", View: "settings"})
+}
+
 func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("file")
 	switch name {
-	case "app.css", "app.js":
+	case "app.css", "app.js", "app.png":
 	default:
 		http.NotFound(w, r)
 		return
@@ -84,8 +92,11 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctype := "text/css; charset=utf-8"
-	if strings.HasSuffix(name, ".js") {
+	switch {
+	case strings.HasSuffix(name, ".js"):
 		ctype = "application/javascript; charset=utf-8"
+	case strings.HasSuffix(name, ".png"):
+		ctype = "image/png"
 	}
 	w.Header().Set("Content-Type", ctype)
 	w.Header().Set("Cache-Control", "no-cache")

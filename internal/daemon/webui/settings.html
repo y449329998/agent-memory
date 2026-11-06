@@ -1,0 +1,159 @@
+{{define "content"}}
+<nav class="crumbs" aria-label="面包屑"><a href="/">总览</a><span class="sep">/</span><span>设置</span></nav>
+
+<header class="settings-head">
+  <div>
+    <p class="kicker">CONTROL INDEX · 本机控制台</p>
+    <h1 class="display-sm settings-title">设置</h1>
+    <p class="lede">服务、托盘、摘要模型与数据管理，保存即生效。</p>
+  </div>
+  <aside class="settings-readout" aria-label="当前状态">
+    <div><span>PORT</span><strong id="sr-port" data-state="port">—</strong></div>
+    <div><span>LLM</span><strong id="sr-llm" data-state="off">—</strong></div>
+    <div><span>TRAY</span><strong id="sr-tray" data-state="off">—</strong></div>
+    <div><span>DB</span><strong id="sr-db">—</strong></div>
+  </aside>
+</header>
+
+<div class="settings-layout">
+  <nav class="settings-nav" aria-label="设置分区">
+    <button class="active" data-section="service" type="button">
+      <span class="sn-no">01</span><span class="sn-main"><b>服务与托盘</b><small>端口 · 启动 · 关窗</small></span><span class="sn-dot" aria-hidden="true"></span>
+    </button>
+    <button data-section="llm" type="button">
+      <span class="sn-no">02</span><span class="sn-main"><b>LLM 摘要</b><small>模型 · 密钥 · 队列</small></span><span class="sn-dot" aria-hidden="true"></span>
+    </button>
+    <button data-section="scan" type="button">
+      <span class="sn-no">03</span><span class="sn-main"><b>扫描与简报</b><small>间隔 · 来源 · 预算</small></span><span class="sn-dot" aria-hidden="true"></span>
+    </button>
+    <button data-section="data" type="button">
+      <span class="sn-no">04</span><span class="sn-main"><b>数据与备份</b><small>备份 · 导出 · 导入</small></span><span class="sn-dot" aria-hidden="true"></span>
+    </button>
+  </nav>
+
+  <div class="settings-body">
+    <section id="settings-service" class="settings-panel">
+      <header class="settings-panel-head">
+        <span class="settings-no">01</span>
+        <div><h2>服务与托盘</h2><p>端口、MCP 启动程序，以及关闭窗口后的驻留方式。端口变更会自动重写已登记的客户端配置。</p></div>
+      </header>
+      <form id="form-service" class="stack settings-form">
+        <div class="settings-grid">
+          <label class="field"><span class="label">服务端口</span><input id="svc-port" type="number" min="1024" max="65535"></label>
+          <label class="field"><span class="label">MCP 启动程序</span><input id="svc-mcp-binary" type="text" placeholder="agent-memory.exe 绝对路径"></label>
+        </div>
+        <p id="svc-running" class="hint"></p>
+        <div class="settings-toggles">
+          <label class="switch-row">
+            <span class="switch-copy"><b>开机自启</b><small>登录后以托盘模式启动</small></span>
+            <input class="switch-input" id="svc-autostart" type="checkbox">
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
+          <label class="switch-row">
+            <span class="switch-copy"><b>关闭窗口后保持托盘运行</b><small>关闭后服务继续为 MCP 提供记忆</small></span>
+            <input class="switch-input" id="svc-close-tray" type="checkbox">
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
+        </div>
+        <div class="settings-actions"><button class="stamp primary" type="submit">保存服务设置</button><span id="svc-status" class="meta"></span></div>
+      </form>
+    </section>
+
+    <section id="settings-llm" class="settings-panel" hidden>
+      <header class="settings-panel-head">
+        <span class="settings-no">02</span>
+        <div><h2>LLM 摘要</h2><p>可选的 OpenAI 兼容模型，异步为记忆和任务生成中文摘要。原文始终保留，失败自动回退。</p></div>
+      </header>
+      <div class="settings-split">
+        <form id="form-llm" class="stack settings-form">
+          <label class="switch-row">
+            <span class="switch-copy"><b>启用异步摘要</b><small>写入后后台生成，不阻塞保存、扫描与页面打开</small></span>
+            <input class="switch-input" id="llm-enabled" type="checkbox">
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
+          <p class="hint">启用后会把记忆正文、任务目标/步骤/片段发送到下方模型服务；原文仍保存在本机。</p>
+          <label class="field"><span class="label">Base URL</span><input id="llm-base" type="text" placeholder="https://api.openai.com/v1 或 http://127.0.0.1:11434/v1"></label>
+          <label class="field"><span class="label">模型</span><input id="llm-model" type="text" placeholder="gpt-4o-mini / qwen2.5"></label>
+          <div class="settings-grid">
+            <label class="field"><span class="label">超时（秒）</span><input id="llm-timeout" type="number" min="5"></label>
+            <label class="field"><span class="label">最大输入字符</span><input id="llm-maxchars" type="number" min="1000"></label>
+          </div>
+          <label class="field"><span class="label">API Key（留空表示保持不变）</span><input id="llm-key" type="password" autocomplete="off"></label>
+          <label class="check"><input id="llm-clear-key" type="checkbox"> 清除已保存的 Key</label>
+          <div class="settings-actions">
+            <button class="stamp primary" type="submit">保存 LLM 设置</button>
+            <button id="llm-test" class="stamp ghost" type="button">测试连接</button>
+            <span id="llm-status" class="meta"></span>
+          </div>
+        </form>
+        <aside class="queue-card">
+          <p class="kicker">ASYNC QUEUE</p>
+          <div class="queue-stats">
+            <div><strong id="llm-pending">0</strong><span>待处理</span></div>
+            <div><strong id="llm-ready">0</strong><span>完成</span></div>
+            <div><strong id="llm-failed">0</strong><span>失败</span></div>
+          </div>
+          <p id="llm-counts" class="queue-note"></p>
+          <button id="llm-retry" class="stamp small ghost" type="button">重试失败摘要</button>
+          <p class="queue-foot">摘要失败不会影响原文、任务状态或 Handoff。</p>
+        </aside>
+      </div>
+    </section>
+
+    <section id="settings-scan" class="settings-panel" hidden>
+      <header class="settings-panel-head">
+        <span class="settings-no">03</span>
+        <div><h2>扫描与简报</h2><p>控制自动扫描节奏、来源开关与交接简报预算。保存后扫描器会热重载，不需要重启服务。</p></div>
+      </header>
+      <form id="form-scan" class="stack settings-form">
+        <div class="settings-grid settings-grid-4">
+          <label class="field"><span class="label">扫描间隔秒</span><input id="scan-interval" type="number" min="5"></label>
+          <label class="field"><span class="label">简报预算</span><input id="scan-budget" type="number" min="500"></label>
+          <label class="field"><span class="label">最近任务数</span><input id="scan-recent" type="number" min="1"></label>
+          <label class="field"><span class="label">静默秒</span><input id="scan-settle" type="number" min="30"></label>
+        </div>
+        <div class="settings-toggles triple">
+          <label class="switch-row">
+            <span class="switch-copy"><b>Qoder</b><small>memory 与 sessions</small></span>
+            <input class="switch-input" id="scan-qoder" type="checkbox">
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
+          <label class="switch-row">
+            <span class="switch-copy"><b>Trae</b><small>memory 与 rules</small></span>
+            <input class="switch-input" id="scan-trae" type="checkbox">
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
+          <label class="switch-row">
+            <span class="switch-copy"><b>WorkBuddy</b><small>MEMORY 与 tasks</small></span>
+            <input class="switch-input" id="scan-workbuddy" type="checkbox">
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
+        </div>
+        <div class="settings-actions"><button class="stamp primary" type="submit">保存扫描设置</button><span id="scan-status" class="meta"></span></div>
+      </form>
+    </section>
+
+    <section id="settings-data" class="settings-panel" hidden>
+      <header class="settings-panel-head">
+        <span class="settings-no">04</span>
+        <div><h2>数据与备份</h2><p>备份是整库一致副本；JSON 导出用于迁移，导入会按项目、记忆文本与任务目标合并。</p></div>
+      </header>
+      <div class="stack">
+        <div id="data-info" class="overview data-metrics"></div>
+        <div class="settings-actions">
+          <button id="data-backup" class="stamp primary" type="button">立即备份</button>
+          <button id="data-open" class="stamp ghost" type="button">打开数据目录</button>
+          <a id="data-export" class="stamp ghost" href="/v1/data/export">导出 JSON</a>
+          <span id="data-status" class="meta"></span>
+        </div>
+        <div class="settings-import">
+          <div class="import-head"><b>导入 JSON</b><span>导入前自动备份；格式错误不会写库</span></div>
+          <label class="field"><span class="label">选择文件</span><input id="data-import-file" type="file" accept="application/json"></label>
+          <div class="row"><button id="data-preview" class="stamp small ghost" type="button">预览导入</button><button id="data-apply" class="stamp small primary" type="button" disabled>确认导入</button></div>
+          <div id="data-preview-box" class="md"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+{{end}}

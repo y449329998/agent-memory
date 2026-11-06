@@ -62,11 +62,11 @@ WHERE NOT EXISTS (SELECT 1 FROM task t WHERE t.id = c.id)`)
 			completed = r.updated
 		}
 		if _, err := tx.ExecContext(ctx, `
-INSERT INTO task(id, project_id, goal, status, next_steps, decisions_json, files_json,
+INSERT INTO task(id, project_id, kind, session_id, goal, status, next_steps, decisions_json, files_json,
   commands_json, errors_json, open_questions, source_agent, source_path,
   completed_at, created_at, updated_at)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			r.cardID, r.projectID, r.goal, r.status, r.next,
+VALUES(?, ?, 'session', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			r.cardID, r.projectID, r.sessionID, r.goal, r.status, r.next,
 			r.decisions, r.files, r.commands, r.errorsJSON, r.questions,
 			r.agent, r.path, completed, r.created, r.updated); err != nil {
 			return err

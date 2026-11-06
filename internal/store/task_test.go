@@ -98,15 +98,15 @@ func TestTaskSessionAndSnippets(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	taskID, err := s.CreateTask(ctx, domain.Task{ProjectID: pid, Goal: "实现导出", Status: domain.StatusDoing, CreatedAt: now, UpdatedAt: now})
+	taskID, err := s.CreateTask(ctx, domain.Task{ProjectID: pid, Kind: domain.TaskKindSession, SessionID: sessID, Goal: "实现导出", Status: domain.StatusDoing, CreatedAt: now, UpdatedAt: now})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := s.LinkTaskSession(ctx, taskID, sessID, "source", now); err != nil {
 		t.Fatal(err)
 	}
-	if got, ok, err := s.TaskBySession(ctx, sessID); err != nil || !ok || got.ID != taskID {
-		t.Fatalf("TaskBySession ok=%v err=%v got=%+v", ok, err, got)
+	if got, ok, err := s.TaskByKindSession(ctx, sessID); err != nil || !ok || got.ID != taskID {
+		t.Fatalf("TaskByKindSession ok=%v err=%v got=%+v", ok, err, got)
 	}
 	if err := s.RefreshTaskSnippets(ctx, taskID, now); err != nil {
 		t.Fatal(err)
@@ -185,8 +185,43 @@ func TestBackfillTasksFromCards(t *testing.T) {
 	if task.Goal != "旧目标" || task.SourceAgent != "qoder" {
 		t.Fatalf("task = %+v", task)
 	}
-	linked, ok, err := s.TaskBySession(ctx, sessID)
+	linked, ok, err := s.TaskByKindSession(ctx, sessID)
 	if err != nil || !ok || linked.ID != cardID {
-		t.Fatalf("session link ok=%v err=%v got=%+v", ok, err, linked)
+		t.Fatalf("session task ok=%v err=%v got=%+v", ok, err, linked)
+	}
+}
+
+func TestListTasksFilters(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0)
+	pid, _ := s.EnsureProject(ctx, "f:/filter", "filter", "", `F:\filter`, now)
+	mk := func(goal, owner, source string, at time.Time, step string) {
+		_, err := s.CreateTask(ctx, domain.Task{
+			ProjectID: pid, Goal: goal, Status: domain.StatusDoing,
+			OwnerAgent: owner, SourceAgent: source, CreatedAt: at, UpdatedAt: at,
+			Steps: []domain.TaskStep{{Subject: step, Status: domain.StepDoing}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("修复导出", "qoder", "qoder", now.Add(-2*time.Hour), "补测试")
+	mk("重构登录", "claude", "workbuddy", now.Add(-40*24*time.Hour), "改页面")
+
+	got, err := s.ListTasks(ctx, TaskFilter{
+		ProjectID: pid, Query: "补测试", OwnerAgent: "qoder",
+		UpdatedAfter: now.Add(-24 * time.Hour), Limit: 20,
+	})
+	if err != nil || len(got) != 1 || got[0].Goal != "修复导出" {
+		t.Fatalf("filter got=%+v err=%v", got, err)
+	}
+	got, err = s.ListTasks(ctx, TaskFilter{ProjectID: pid, SourceAgent: "workbuddy", Limit: 20})
+	if err != nil || len(got) != 1 || got[0].Goal != "重构登录" {
+		t.Fatalf("source filter got=%+v err=%v", got, err)
+	}
+	got, err = s.ListTasks(ctx, TaskFilter{ProjectID: pid, Query: "不存在", Limit: 20})
+	if err != nil || len(got) != 0 {
+		t.Fatalf("query got=%+v err=%v", got, err)
 	}
 }

@@ -71,6 +71,28 @@
     catch (e) { fail(label, e); }
     finally { btn.disabled = false; btn.textContent = old; }
   }
+  function summaryOf(item) {
+    if (!item) return '';
+    const state = item.summary_state || item.SummaryState || '';
+    return state === 'ready' ? (item.summary || item.Summary || '') : '';
+  }
+  function paintSummary(boxID, textID, item) {
+    const box = $(boxID);
+    if (!box) return;
+    const summary = summaryOf(item);
+    const state = item.summary_state || item.SummaryState || '';
+    const pending = state === 'pending' || state === 'processing';
+    const failed = state === 'failed';
+    box.hidden = !summary && !pending && !failed;
+    box.classList.toggle('pending', !summary && pending);
+    const badge = box.querySelector('.ai-badge');
+    if (badge) badge.textContent = summary ? 'AI 摘要' : (failed ? 'AI 摘要 · 失败' : 'AI 摘要 · 生成中');
+    const text = $(textID);
+    if (!text) return;
+    if (summary) renderMd(text, summary);
+    else if (failed) text.textContent = '摘要生成失败，原文与任务状态不受影响。';
+    else text.textContent = '摘要生成中，原文仍可阅读和编辑。';
+  }
   function fmtTime(v) {
     if (!v) return '—';
     const d = new Date(v);
@@ -81,6 +103,44 @@
   function typeLabel(t) { return TYPES.filter((x) => x[0] === t).map((x) => x[1])[0] || t || '其他'; }
   function typeStamp(t) { return el('span', 'stamp tiny type-' + (t || 'fact'), typeLabel(t)); }
   function statusStamp(s) { return el('span', 'stamp tiny status-' + (s || 'unknown'), STATUS[s] || STATUS.unknown); }
+  function isSessionTask(t) { return (t.Kind || 'formal') === 'session'; }
+  // taskCard 是任务卡的唯一构造入口：项目档案与任务页共用，避免两处排版各自漂移。
+  function taskCard(t, opts) {
+    const o = opts || {};
+    const card = el('article', 'card task-card');
+    card.dataset.status = t.Status || 'unknown';
+    card.dataset.kind = isSessionTask(t) ? 'session' : 'formal';
+    const head = el('div', 'card-head');
+    const title = el('a', 'task-link', clipText(plainPreview(t.Goal || '（无目标）'), 100));
+    title.href = '/t/' + t.ID;
+    head.appendChild(title);
+    head.appendChild(statusStamp(t.Status));
+    head.appendChild(el('span', 'stamp tiny kind-mark', isSessionTask(t) ? (t.SourceAgent || 'agent') + ' 对话' : '合并任务'));
+    head.appendChild(el('span', 'stamp tiny', t.OwnerAgent || '未认领'));
+    card.appendChild(head);
+    if (isRealTime(t.ArchivedAt)) head.appendChild(el('span', 'stamp tiny stale-mark', '已归档'));
+    const bits = ['步骤 ' + taskProgress(t)];
+    if (!isSessionTask(t)) bits.push(t.SourceAgent || '手动');
+    if (o.when) bits.push('最近更新 ' + fmtTime(t.UpdatedAt));
+    card.appendChild(el('div', 'meta', bits.join(' · ')));
+    const summary = summaryOf(t);
+    if (summary) {
+      const wrap = el('div', 'task-summary');
+      wrap.appendChild(el('span', 'stamp tiny ai-badge', 'AI 摘要'));
+      const md = el('div', 'md md-clamp card-md');
+      renderMd(md, summary);
+      wrap.appendChild(md);
+      card.appendChild(wrap);
+    } else if (t.NextSteps) {
+      card.appendChild(el('p', 'task-excerpt', clipText(plainPreview(t.NextSteps), 220)));
+    }
+    if (o.link) {
+      const a = el('a', 'more', '打开任务 →');
+      a.href = '/t/' + t.ID;
+      card.appendChild(a);
+    }
+    return card;
+  }
   function fillTypeSelect(sel, withAll, def) {
     if (!sel) return;
     clear(sel);
@@ -308,8 +368,11 @@
   }
   function revealSections() {
     document.documentElement.classList.add('js');
-    if (!('IntersectionObserver' in window)) return;
     const sections = Array.from(document.querySelectorAll('.section'));
+    if (!('IntersectionObserver' in window)) {
+      sections.forEach((s) => s.classList.add('in'));
+      return;
+    }
     sections.forEach((s) => s.classList.add('reveal'));
     const io = new IntersectionObserver((entries) => {
       entries.forEach((e) => {
@@ -317,6 +380,8 @@
       });
     }, { rootMargin: '0px 0px -40px 0px' });
     sections.forEach((s) => io.observe(s));
+    // 兜底：无头截图、后台标签页或不支持 IO 回调时，别让正文一直停在 opacity:0。
+    setTimeout(() => sections.forEach((s) => s.classList.add('in')), 900);
   }
   function entry(m, next) {
     const li = el('li', 'entry');
@@ -327,9 +392,11 @@
     head.appendChild(typeStamp(m.Type));
     head.appendChild(el('span', 'meta', m.Scope === 'user' ? '用户级' : '项目级'));
     if (m.Stale) head.appendChild(el('span', 'stamp tiny stale-mark', '过时'));
+    const summary = summaryOf(m);
+    if (summary) head.appendChild(el('span', 'stamp tiny ai-badge', 'AI 摘要'));
     a.appendChild(head);
     const preview = el('div', 'entry-text md md-clamp entry-md');
-    renderMd(preview, clip(m.Text || '', 3000), true);
+    renderMd(preview, clip(summary || (m.Text || ''), 3000), true);
     a.appendChild(preview);
     const meta = el('div', 'entry-meta');
     const agents = (m.Sources || []).map((s) => s.Agent).filter(Boolean);
@@ -341,7 +408,7 @@
   }
   function emptyRow(list, text) { list.appendChild(el('li', 'empty', text)); }
   function normalizeHit(h) {
-    return { ID: h.id, Scope: h.scope, Type: h.type, Text: h.text, Stale: h.stale, LastSeenAt: h.last_seen_at, Sources: h.sources || [] };
+    return { ID: h.id, Scope: h.scope, Type: h.type, Text: h.text, Stale: h.stale, LastSeenAt: h.last_seen_at, Sources: h.sources || [], Summary: h.summary, SummaryState: h.summary_state };
   }
 
   /* ---------- 首页 ---------- */
@@ -370,7 +437,7 @@
       countUp($('stat-memories'), d.memories);
       countUp($('stat-stale'), d.stale);
       countUp($('stat-sources'), d.sources);
-      countUp($('stat-failed'), d.failed_source);
+      countUp($('stat-tasks'), d.tasks);
     } catch (e) { fail('读取概览', e); }
   }
   async function loadHomeProjects() {
@@ -526,23 +593,7 @@
     try {
       const d = await api('/v1/tasks?project_key=' + enc(key) + '&limit=20');
       const tasks = d.tasks || [];
-      tasks.forEach((t) => {
-        const card = el('article', 'card');
-        const head = el('div', 'card-head');
-        const title = el('a', 'task-link', clipText(plainPreview(t.Goal || '（无目标）'), 100));
-        title.href = '/t/' + t.ID;
-        head.appendChild(title);
-        head.appendChild(statusStamp(t.Status));
-        head.appendChild(el('span', 'stamp tiny', t.OwnerAgent || '未认领'));
-        card.appendChild(head);
-        card.appendChild(el('div', 'meta', '步骤 ' + taskProgress(t) + ' · ' + (t.SourceAgent || '手动')));
-        if (t.NextSteps) {
-          const md = el('div', 'md md-clamp card-md');
-          renderMd(md, t.NextSteps);
-          card.appendChild(md);
-        }
-        box.appendChild(card);
-      });
+      tasks.forEach((t) => box.appendChild(taskCard(t, { when: true })));
       if (!tasks.length) box.appendChild(el('p', 'empty', '还没有任务。'));
       $('task-meta').textContent = tasks.length ? '共 ' + tasks.length + ' 个任务' : '';
     } catch (e) {
@@ -659,6 +710,32 @@
     fillProjectFilter(state.mem.project);
     loadMemories(true);
     $('more').addEventListener('click', () => { state.mem.offset += 50; loadMemories(false); });
+    bindMemFilters();
+  }
+  // bindMemFilters 让筛选条件一改就出结果：地址栏用 replaceState 同步，不整页刷新。
+  function bindMemFilters() {
+    const form = $('filters');
+    const text = $('filter-q');
+    if (!form || !text) return;
+    let timer = null;
+    function apply() {
+      state.mem.query = text.value.trim();
+      state.mem.scope = $('filter-scope').value;
+      state.mem.project = $('filter-project').value;
+      state.mem.type = $('filter-type').value;
+      state.mem.stale = $('filter-stale').checked;
+      const qs = new URLSearchParams();
+      if (state.mem.query) qs.set('q', state.mem.query);
+      if (state.mem.scope) qs.set('scope', state.mem.scope);
+      if (state.mem.project) qs.set('project', state.mem.project);
+      if (state.mem.type) qs.set('type', state.mem.type);
+      if (state.mem.stale) qs.set('stale', '1');
+      history.replaceState(null, '', qs.toString() ? '/memories?' + qs.toString() : '/memories');
+      loadMemories(true);
+    }
+    form.addEventListener('submit', (e) => { e.preventDefault(); apply(); });
+    form.addEventListener('change', apply);
+    text.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(apply, 420); });
   }
   async function fillProjectFilter(selected) {
     const sel = $('filter-project');
@@ -717,6 +794,14 @@
     const failed = new URLSearchParams(location.search).get('failed') === '1';
     $('filter-failed').checked = failed;
     loadSourcePage(failed);
+    function run() {
+      const on = $('filter-failed').checked;
+      history.replaceState(null, '', on ? '/sources?failed=1' : '/sources');
+      loadSourcePage(on);
+    }
+    const form = $('filter-failed').closest('form');
+    if (form) form.addEventListener('submit', (e) => { e.preventDefault(); run(); });
+    $('filter-failed').addEventListener('change', run);
   }
   async function loadSourcePage(failed) {
     const list = $('source-list');
@@ -743,53 +828,480 @@
     }
   }
 
+  /* ---------- 设置 ---------- */
+  async function initSettings() {
+    let data = null;
+    function showSection(name) {
+      if (['service', 'llm', 'scan', 'data'].indexOf(name) < 0) name = 'service';
+      ['service', 'llm', 'scan', 'data'].forEach((key) => {
+        $('settings-' + key).hidden = key !== name;
+        const btn = document.querySelector('.settings-nav button[data-section="' + key + '"]');
+        if (!btn) return;
+        btn.classList.toggle('active', key === name);
+        if (key === name) btn.setAttribute('aria-current', 'true');
+        else btn.removeAttribute('aria-current');
+      });
+      try { history.replaceState(null, '', '#' + name); } catch (e) {}
+    }
+    function fmtSize(n) {
+      n = Number(n) || 0;
+      if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+      return Math.round(n / 1024) + ' KB';
+    }
+    function paintQueue(l) {
+      $('llm-pending').textContent = l.summary_pending || 0;
+      $('llm-ready').textContent = l.summary_ready || 0;
+      $('llm-failed').textContent = l.summary_failed || 0;
+      const total = (l.summary_pending || 0) + (l.summary_ready || 0) + (l.summary_failed || 0);
+      $('llm-counts').textContent = total ? '共 ' + total + ' 条摘要任务' : '还没有摘要任务';
+    }
+    Array.from(document.querySelectorAll('.settings-nav button')).forEach((b) => {
+      b.addEventListener('click', () => showSection(b.dataset.section));
+    });
+    window.addEventListener('hashchange', () => showSection((location.hash || '').replace('#', '')));
+    function fill() {
+      const s = data.server, d = data.desktop, sc = data.scan, l = data.llm, da = data.data;
+      const runningPort = s.running_port || s.port;
+      $('sr-port').textContent = runningPort || '—';
+      $('sr-port').title = '配置端口 ' + s.port + (s.running_port && s.running_port !== s.port ? ' · 当前运行 ' + s.running_port : '');
+      $('sr-llm').textContent = l.enabled ? 'ON' : 'OFF';
+      $('sr-llm').dataset.state = l.enabled ? 'on' : 'off';
+      $('sr-llm').title = l.model || '';
+      $('sr-tray').textContent = d.close_to_tray ? 'ON' : 'OFF';
+      $('sr-tray').dataset.state = d.close_to_tray ? 'on' : 'off';
+      $('sr-db').textContent = fmtSize(da.db_size);
+      $('svc-port').value = s.port;
+      $('svc-running').textContent = s.running_port && s.running_port !== s.port
+        ? '当前实际运行端口 ' + s.running_port + '，保存后切换到 ' + s.port + '。'
+        : '';
+      $('svc-mcp-binary').value = s.mcp_binary || '';
+      $('svc-autostart').checked = d.autostart;
+      $('svc-close-tray').checked = d.close_to_tray;
+      $('llm-enabled').checked = l.enabled;
+      $('llm-base').value = l.base_url || '';
+      $('llm-model').value = l.model || '';
+      $('llm-timeout').value = l.timeout_seconds || 30;
+      $('llm-maxchars').value = l.max_input_chars || 12000;
+      $('llm-key').placeholder = l.api_key_configured ? '已保存，留空不修改' : '未配置';
+      $('llm-status').textContent = l.enabled && (!l.base_url || !l.model || !l.api_key_configured)
+        ? '配置不完整（需要 base_url、模型与 API Key），摘要不会启动'
+        : '';
+      paintQueue(l);
+      $('scan-interval').value = sc.interval_seconds;
+      $('scan-budget').value = sc.budget_tokens;
+      $('scan-recent').value = sc.recent_cards;
+      $('scan-settle').value = sc.settle_idle_seconds;
+      $('scan-qoder').checked = !sc.qoder_disabled;
+      $('scan-trae').checked = !sc.trae_disabled;
+      $('scan-workbuddy').checked = !sc.workbuddy_disabled;
+      const info = $('data-info');
+      clear(info);
+      const cell = (k, v) => {
+        const c = el('div', 'cell');
+        c.appendChild(el('span', 'k', k));
+        c.appendChild(el('span', 'v', v || '—'));
+        info.appendChild(c);
+      };
+      cell('数据目录', da.data_dir);
+      cell('库大小', fmtSize(da.db_size));
+      cell('最近备份', da.last_backup || '尚无');
+      cell('摘要队列', '待处理 ' + (l.summary_pending || 0) + ' · 完成 ' + (l.summary_ready || 0) + ' · 失败 ' + (l.summary_failed || 0));
+    }
+    try {
+      data = await api('/v1/settings');
+      fill();
+      showSection((location.hash || '').replace('#', '') || 'service');
+    } catch (e) {
+      toast('error', '设置加载失败：' + e.message);
+    }
+    $('form-service').addEventListener('submit', function (e) {
+      e.preventDefault();
+      const btn = this.querySelector('button[type="submit"]');
+      busy(btn, '保存', async function () {
+        const d = await api('/v1/settings/service', {
+          method: 'POST', body: JSON.stringify({
+            port: Number($('svc-port').value),
+            mcp_binary_path: $('svc-mcp-binary').value.trim(),
+            autostart: $('svc-autostart').checked,
+            close_to_tray: $('svc-close-tray').checked
+          })
+        });
+        if (d.warnings && d.warnings.length) toast('error', d.warnings.join('；'));
+        if (d.port && String(d.port) !== location.port) {
+          // sessionStorage 按 origin 隔离；换端口后要重新带上令牌，否则新页面会要求登录。
+          const next = location.protocol + '//' + location.hostname + ':' + d.port +
+            '/settings?token=' + enc(state.token);
+          setTimeout(() => { location.href = next; }, d.warnings && d.warnings.length ? 1600 : 400);
+          return;
+        }
+        data = await api('/v1/settings');
+        fill();
+        showSection('service');
+        $('svc-status').textContent = '已保存';
+        toast('info', '服务设置已保存');
+      });
+    });
+    $('form-llm').addEventListener('submit', function (e) {
+      e.preventDefault();
+      const btn = this.querySelector('button[type="submit"]');
+      busy(btn, '保存', async function () {
+        const d = await api('/v1/settings/llm', {
+          method: 'POST', body: JSON.stringify({
+            enabled: $('llm-enabled').checked,
+            base_url: $('llm-base').value.trim(),
+            model: $('llm-model').value.trim(),
+            timeout_seconds: Number($('llm-timeout').value),
+            max_input_chars: Number($('llm-maxchars').value),
+            api_key: $('llm-key').value,
+            clear_api_key: $('llm-clear-key').checked
+          })
+        });
+        $('llm-key').value = '';
+        $('llm-clear-key').checked = false;
+        toast(d.restart_required ? 'info' : 'info', d.restart_required ? '设置已保存，重启后生效' : 'LLM 设置已保存');
+        data = await api('/v1/settings');
+        fill();
+      });
+    });
+    $('llm-test').addEventListener('click', function () {
+      const btn = this;
+      busy(btn, '测试', async function () {
+        const d = await api('/v1/settings/llm/test', { method: 'POST', body: '{}' });
+        $('llm-status').textContent = d.ok ? ('连接成功 · ' + d.model + ' · ' + d.elapsed_ms + 'ms') : ('连接失败：' + d.error);
+        toast(d.ok ? 'info' : 'error', d.ok ? '模型连接成功' : '模型连接失败');
+      });
+    });
+    $('llm-retry').addEventListener('click', function () {
+      const btn = this;
+      busy(btn, '重试', async function () {
+        const d = await api('/v1/settings/llm/retry', { method: 'POST', body: '{}' });
+        toast('info', d.retried ? ('已重新排队 ' + d.retried + ' 条摘要') : '没有失败的摘要需要重试');
+        const latest = await api('/v1/settings');
+        paintQueue(latest.llm);
+      });
+    });
+    $('form-scan').addEventListener('submit', function (e) {
+      e.preventDefault();
+      const btn = this.querySelector('button[type="submit"]');
+      busy(btn, '保存', async function () {
+        const d = await api('/v1/settings/scan', {
+          method: 'POST', body: JSON.stringify({
+            interval_seconds: Number($('scan-interval').value),
+            budget_tokens: Number($('scan-budget').value),
+            recent_cards: Number($('scan-recent').value),
+            settle_idle_seconds: Number($('scan-settle').value),
+            qoder_disabled: !$('scan-qoder').checked,
+            trae_disabled: !$('scan-trae').checked,
+            workbuddy_disabled: !$('scan-workbuddy').checked
+          })
+        });
+        toast(d.restart_required ? 'info' : 'info', d.restart_required ? '已保存，重启服务后生效' : '扫描设置已保存');
+        $('scan-status').textContent = d.restart_required ? '需重启' : '已生效';
+      });
+    });
+    $('data-backup').addEventListener('click', function () {
+      const btn = this;
+      busy(btn, '备份', async function () {
+        const d = await api('/v1/data/backup', { method: 'POST', body: '{}' });
+        $('data-status').textContent = '已备份：' + (d.path || '');
+        toast('info', '备份完成');
+        data = await api('/v1/settings');
+        fill();
+      });
+    });
+    $('data-open').addEventListener('click', async function () {
+      try { await api('/v1/data/open', { method: 'POST', body: '{}' }); toast('info', '已打开数据目录'); }
+      catch (e) { toast('error', e.message); }
+    });
+    $('data-export').addEventListener('click', async function (e) {
+      e.preventDefault();
+      try {
+        const res = await fetch('/v1/data/export', { headers: { Authorization: 'Bearer ' + state.token } });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const blob = await res.blob();
+        const a = el('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'agent-memory-export.json';
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      } catch (err) { toast('error', '导出失败：' + err.message); }
+    });
+    let importToken = '';
+    $('data-preview').addEventListener('click', async function () {
+      const file = $('data-import-file').files[0];
+      if (!file) { toast('error', '请先选择 JSON 文件'); return; }
+      try {
+        const fd = new FormData();
+        fd.append('file', file);
+        const res = await fetch('/v1/data/import', {
+          method: 'POST', headers: { Authorization: 'Bearer ' + state.token }, body: fd
+        });
+        const text = await res.text();
+        let d = {};
+        try { d = text ? JSON.parse(text) : {}; } catch (e) { d = { error: text.slice(0, 200) }; }
+        if (!res.ok) { toast('error', d.error || '预览失败'); return; }
+        importToken = d.import_token;
+        $('data-apply').disabled = !importToken;
+        const box = $('data-preview-box');
+        box.textContent = '将处理：项目 ' + d.projects + '，记忆 ' + d.memories + '，任务 ' + d.tasks;
+        if (d.errors && d.errors.length) box.textContent += '；跳过 ' + d.errors.length + ' 项：' + d.errors.slice(0, 3).join('；');
+      } catch (err) {
+        toast('error', '预览失败：' + err.message);
+      }
+    });
+    $('data-apply').addEventListener('click', async function () {
+      if (!importToken) return;
+      const btn = this;
+      busy(btn, '导入', async function () {
+        const d = await api('/v1/data/import/apply', { method: 'POST', body: JSON.stringify({ import_token: importToken }) });
+        toast('info', '导入完成：项目 ' + d.projects + '，记忆 ' + d.memories + '，任务 ' + d.tasks);
+        importToken = '';
+        $('data-apply').disabled = true;
+        $('data-preview-box').textContent = '导入完成';
+      });
+    });
+  }
+
+  /* ---------- MCP 接驳台 ---------- */
+  async function initMCP() {
+    const CLIENTS = {
+      qoder: { label: 'Qoder', path: '~/.qoder-cn/mcp.json' },
+      opencode: { label: 'OpenCode', path: '~/.config/opencode/opencode.json' },
+      claude: { label: 'Claude Code', path: '~/.claude.json' },
+      generic: { label: '通用 stdio', path: '任意 MCP 客户端配置' }
+    };
+    let data = null;
+    let tab = 'qoder';
+    const code = $('mcp-code');
+    const gutter = $('mcp-code-gutter');
+    function paintTab(name) {
+      tab = name;
+      Array.from(document.querySelectorAll('#mcp-tabs button')).forEach((b) => {
+        const active = b.dataset.tab === name;
+        b.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      const snippet = (data && data.snippets && data.snippets[name]) || '';
+      code.textContent = snippet;
+      const lines = snippet.replace(/\n$/, '').split('\n');
+      gutter.textContent = lines.map((_, i) => String(i + 1).padStart(2, '0')).join('\n');
+      $('mcp-client-label').textContent = CLIENTS[name].label;
+      $('mcp-client-path').textContent = CLIENTS[name].path;
+    }
+    try {
+      data = await api('/v1/mcp/snippets');
+      $('mcp-port').textContent = data.port || '—';
+      $('mcp-host').textContent = '127.0.0.1:' + (data.port || '—');
+      $('mcp-binary').textContent = data.binary || '—';
+      $('mcp-token').textContent = data.token_masked || '—';
+      $('mcp-status').textContent = '服务在线';
+      $('mcp-verified').textContent = '';
+      (data.verified || []).forEach((agent) => {
+        $('mcp-verified').appendChild(el('span', 'verify-chip', (CLIENTS[agent] ? CLIENTS[agent].label : agent) + ' 已验证'));
+      });
+      $('mcp-verified').appendChild(el('span', 'verify-chip template', '通用模板'));
+      Array.from($('mcp-tabs').children).forEach((b) => b.addEventListener('click', () => paintTab(b.dataset.tab)));
+      paintTab('qoder');
+      $('mcp-copy').addEventListener('click', async () => {
+        const btn = $('mcp-copy');
+        const text = data.snippets[tab] || '';
+        try {
+          await navigator.clipboard.writeText(text);
+          btn.textContent = '已复制';
+          btn.classList.add('copied');
+          toast('info', '配置已复制，粘贴到客户端后重启 agent');
+          setTimeout(() => { btn.textContent = '复制配置'; btn.classList.remove('copied'); }, 1800);
+        } catch (e) {
+          window.prompt('复制失败，请手动复制', text);
+        }
+      });
+    } catch (e) {
+      code.textContent = '加载失败：' + e.message;
+      gutter.textContent = '';
+      $('mcp-status').textContent = '连接失败';
+      const live = document.querySelector('.dock-live');
+      if (live) live.classList.add('error');
+      toast('error', 'MCP 配置加载失败');
+    }
+  }
+
+  function enhanceSelect(sel) {
+    if (!sel || sel.dataset.enhanced === '1') return;
+    sel.dataset.enhanced = '1';
+    const shell = el('div', 'select-shell');
+    sel.parentNode.insertBefore(shell, sel);
+    shell.appendChild(sel);
+    sel.classList.add('select-native');
+    sel.tabIndex = -1;
+    const trigger = el('button', 'select-trigger');
+    trigger.type = 'button';
+    trigger.setAttribute('aria-haspopup', 'listbox');
+    trigger.setAttribute('aria-expanded', 'false');
+    const field = shell.parentNode;
+    const label = field && field.querySelector(':scope > span');
+    if (label) trigger.setAttribute('aria-label', label.textContent);
+    const menu = el('div', 'select-menu');
+    menu.hidden = true;
+    menu.setAttribute('role', 'listbox');
+    shell.appendChild(trigger);
+    shell.appendChild(menu);
+    function sync() {
+      const opt = sel.options[sel.selectedIndex];
+      trigger.textContent = opt ? opt.textContent : '—';
+    }
+    function close() {
+      menu.hidden = true;
+      trigger.setAttribute('aria-expanded', 'false');
+    }
+    function open() {
+      clear(menu);
+      Array.from(sel.options).forEach(function (opt, i) {
+        const item = el('button', 'select-option');
+        item.type = 'button';
+        item.setAttribute('role', 'option');
+        item.textContent = opt.textContent;
+        if (i === sel.selectedIndex) item.classList.add('selected');
+        item.addEventListener('click', function () {
+          sel.selectedIndex = i;
+          sync();
+          close();
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+          trigger.focus();
+        });
+        menu.appendChild(item);
+      });
+      menu.hidden = false;
+      trigger.setAttribute('aria-expanded', 'true');
+    }
+    trigger.addEventListener('click', function (e) {
+      e.preventDefault();
+      if (menu.hidden) open();
+      else close();
+    });
+    trigger.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        if (menu.hidden) open();
+      } else if (e.key === 'Escape') {
+        close();
+      }
+    });
+    menu.addEventListener('keydown', function (e) {
+      const items = Array.from(menu.children);
+      const at = items.indexOf(document.activeElement);
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const next = items[Math.max(0, Math.min(items.length - 1, at + (e.key === 'ArrowDown' ? 1 : -1)))];
+        if (next) next.focus();
+      } else if (e.key === 'Escape') {
+        close();
+        trigger.focus();
+      }
+    });
+    sel.addEventListener('change', sync);
+    document.addEventListener('click', function (e) {
+      if (!shell.contains(e.target)) close();
+    });
+    sel._syncSelect = sync;
+    sync();
+  }
+
+  // enhanceAllSelects 把暗色自定义下拉应用到 root 内的所有 select（含动态插入的步骤行）。
+  function enhanceAllSelects(root) {
+    if (!root || !root.querySelectorAll) return;
+    if (root.matches && root.matches('select')) enhanceSelect(root);
+    root.querySelectorAll('select').forEach(enhanceSelect);
+  }
+
+  function observeSelects() {
+    enhanceAllSelects(document);
+    const mo = new MutationObserver(function (muts) {
+      muts.forEach(function (m) {
+        m.addedNodes.forEach(function (n) { if (n.nodeType === 1) enhanceAllSelects(n); });
+      });
+    });
+    mo.observe(document.body, { childList: true, subtree: true });
+  }
+
   /* ---------- 任务页 ---------- */
   async function initTasks() {
     const list = $('task-cards');
     const params = new URLSearchParams(location.search);
-    const archived = params.get('archived') === '1';
-    const projectKey = params.get('project_key') || '';
-    $('tasks-archived').checked = archived;
+    const q = $('tf-q'), project = $('tf-project'), status = $('tf-status');
+    const owner = $('tf-owner'), source = $('tf-source'), range = $('tf-range'), sort = $('tf-sort');
+    const kind = $('tf-kind');
+    q.value = params.get('q') || '';
+    status.value = params.get('status') || '';
+    owner.value = params.get('owner_agent') || '';
+    source.value = params.get('source_agent') || '';
+    range.value = params.get('range') || '';
+    sort.value = params.get('sort') || '';
+    kind.value = params.has('kind') ? params.get('kind') : 'session';
+    $('tasks-archived').checked = params.get('archived') === '1';
+    [kind, project, status, source, range, sort].forEach(enhanceSelect);
+    api('/v1/projects').then((d) => {
+      (d.projects || []).forEach((p) => {
+        const option = el('option', '', p.display_name || p.key);
+        option.value = p.key;
+        project.appendChild(option);
+      });
+      project.value = params.get('project_key') || '';
+      if (project._syncSelect) project._syncSelect();
+    }).catch(() => {}).finally(() => { load(); });
     async function load() {
       clear(list);
       list.appendChild(el('p', 'empty', '载入中…'));
       try {
         const query = ['limit=100'];
-        if (projectKey) query.push('project_key=' + enc(projectKey));
-        if (archived) query.push('include_archived=1');
+        if (kind.value) query.push('kind=' + enc(kind.value));
+        if (q.value.trim()) query.push('q=' + enc(q.value.trim()));
+        if (project.value) query.push('project_key=' + enc(project.value));
+        if (status.value) query.push('status=' + enc(status.value));
+        if (owner.value.trim()) query.push('owner_agent=' + enc(owner.value.trim()));
+        if (source.value) query.push('source_agent=' + enc(source.value));
+        if (range.value) {
+          const days = Number(range.value);
+          const after = new Date(Date.now() - days * 86400000).toISOString();
+          query.push('updated_after=' + enc(after));
+        }
+        if (sort.value) query.push('sort=' + enc(sort.value));
+        if ($('tasks-archived').checked) query.push('include_archived=1');
         const d = await api('/v1/tasks?' + query.join('&'));
         const tasks = d.tasks || [];
         clear(list);
-        tasks.forEach((t) => {
-          const card = el('article', 'card');
-          const head = el('div', 'card-head');
-          const title = el('a', 'task-link', clipText(plainPreview(t.Goal || '（无目标）'), 100));
-          title.href = '/t/' + t.ID;
-          head.appendChild(title);
-          head.appendChild(statusStamp(t.Status));
-          head.appendChild(el('span', 'stamp tiny', t.OwnerAgent || '未认领'));
-          card.appendChild(head);
-          if (isRealTime(t.ArchivedAt)) head.appendChild(el('span', 'stamp tiny stale-mark', '已归档'));
-          card.appendChild(el('div', 'meta', '步骤 ' + taskProgress(t) + ' · ' + (t.SourceAgent || '手动') + ' · 最近更新 ' + fmtTime(t.UpdatedAt)));
-          const a = el('a', 'more', '打开任务 →');
-          a.href = '/t/' + t.ID;
-          card.appendChild(a);
-          list.appendChild(card);
-        });
-        if (!tasks.length) list.appendChild(el('p', 'empty', '还没有任务。'));
-        $('tasks-meta').textContent = '共 ' + tasks.length + ' 条';
+        tasks.forEach((t) => list.appendChild(taskCard(t, { when: true, link: true })));
+        if (!tasks.length) list.appendChild(el('p', 'empty', kind.value === 'session' ? '还没有对话任务，跑一轮同步就会把各 agent 的会话整理进来。' : '还没有任务。'));
+        const sortLabel = sort.options[sort.selectedIndex] ? sort.options[sort.selectedIndex].textContent : '最近有内容';
+        $('tasks-meta').textContent = '共 ' + tasks.length + ' 条 · 按' + sortLabel + '排序';
       } catch (e) {
         clear(list);
         list.appendChild(el('p', 'empty', '加载失败：' + e.message));
       }
     }
-    $('tasks-archived').addEventListener('change', () => {
-      const qs = new URLSearchParams(location.search);
+    function applyFilters() {
+      const qs = new URLSearchParams();
+      qs.set('kind', kind.value);
+      if (q.value.trim()) qs.set('q', q.value.trim());
+      if (project.value) qs.set('project_key', project.value);
+      if (status.value) qs.set('status', status.value);
+      if (owner.value.trim()) qs.set('owner_agent', owner.value.trim());
+      if (source.value) qs.set('source_agent', source.value);
+      if (range.value) qs.set('range', range.value);
+      if (sort.value) qs.set('sort', sort.value);
       if ($('tasks-archived').checked) qs.set('archived', '1');
-      else qs.delete('archived');
-      location.search = qs.toString();
+      history.replaceState(null, '', qs.toString() ? '/tasks?' + qs.toString() : '/tasks');
+      load();
+    }
+    const filters = $('task-filters');
+    filters.addEventListener('submit', (e) => { e.preventDefault(); applyFilters(); });
+    filters.addEventListener('change', applyFilters);
+    let filterTimer = null;
+    [q, owner].forEach(function (inp) {
+      inp.addEventListener('input', function () {
+        clearTimeout(filterTimer);
+        filterTimer = setTimeout(applyFilters, 420);
+      });
     });
-    load();
+    $('tf-reset').addEventListener('click', () => { location.search = ''; });
   }
 
   function isRealTime(v) {
@@ -813,6 +1325,7 @@
     function addStep(step) {
       const row = el('div', 'step-row');
       const status = el('select');
+      status.setAttribute('aria-label', '步骤状态');
       [['pending', '待办'], ['doing', '进行中'], ['done', '完成'], ['blocked', '受阻'], ['skipped', '跳过']].forEach(function (pair) {
         const opt = el('option', '', pair[1]); opt.value = pair[0]; status.appendChild(opt);
       });
@@ -856,7 +1369,10 @@
       renderNextPreview();
       (d.Steps || []).forEach(addStep);
       if (!rows.length) addStep({ Status: 'pending' });
-      $('task-meta').textContent = '来源 ' + (d.SourceAgent || '手动') + ' · 最近更新 ' + fmtTime(d.UpdatedAt) + (isRealTime(d.ArchivedAt) ? ' · 已归档' : '');
+      const kindName = (d.Kind || 'formal') === 'session' ? '对话任务' : '合并任务';
+      const kindNote = kindName === '对话任务' ? ' · 步骤取自那次对话，保存后不再被扫描覆盖' : '';
+      $('task-meta').textContent = kindName + ' · 来源 ' + (d.SourceAgent || '手动') + ' · 最近更新 ' + fmtTime(d.UpdatedAt) + (isRealTime(d.ArchivedAt) ? ' · 已归档' : '') + kindNote;
+      paintSummary('task-ai-summary', 'task-ai-summary-text', d);
       $('task-archive').textContent = isRealTime(d.ArchivedAt) ? '恢复' : '归档';
       const snippetBox = $('snippet-list');
       clear(snippetBox);
@@ -980,6 +1496,7 @@
       renderEditPreview();
       fillTypeSelect($('edit-type'), false, m.Type || 'fact');
       $('edit-scope').textContent = m.Scope === 'user' ? '用户级' : '项目级';
+      paintSummary('memory-ai-summary', 'memory-ai-summary-text', m);
       const imported = (m.Sources || []).some((s) => s.Path && s.Path !== 'mcp');
       const sources = (m.Sources || []).map((s) => s.Agent + ' · ' + (s.Path === 'mcp' ? '手动写入' : (s.Path || '—')));
       $('edit-meta').textContent = '来源：' + (sources.join('；') || '—') + '  ·  首次：' + fmtTime(m.FirstSeenAt) + '  ·  最后变更：' + fmtTime(m.LastSeenAt);
@@ -1057,7 +1574,10 @@
     else if (view === 'sources') initSources();
     else if (view === 'tasks') initTasks();
     else if (view === 'task') initTask();
+    else if (view === 'mcp') initMCP();
+    else if (view === 'settings') initSettings();
     else if (view === 'edit') initEdit();
+    observeSelects();
   }
   init();
 })();

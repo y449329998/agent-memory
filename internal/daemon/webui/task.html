@@ -3,6 +3,10 @@
 <article class="sheet wide rise">
   <p class="kicker">TASK <span id="task-id" class="mono"></span></p>
   <h1 class="display-sm" id="task-title">任务</h1>
+  <section id="task-ai-summary" class="ai-summary" hidden>
+    <span class="stamp tiny ai-badge">AI 摘要</span>
+    <div id="task-ai-summary-text" class="md"></div>
+  </section>
   <form id="task-form" class="stack">
     <label class="field" id="task-project-field"><span class="label">项目路径</span><input id="task-project" type="text" placeholder="例如 F:\go\demo"></label>
     <label class="field"><span class="label">目标</span><textarea id="task-goal" rows="2" required></textarea></label>

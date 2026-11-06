@@ -37,6 +37,7 @@ type HandoffInput struct {
 type TaskInput struct {
 	ProjectPath     string `json:"project_path"`
 	Status          string `json:"status"`
+	Kind            string `json:"kind"`
 	IncludeArchived bool   `json:"include_archived"`
 	Limit           int    `json:"limit"`
 }
@@ -132,10 +133,11 @@ func (s *Server) toolDefinitions() []toolDef {
 			objectSchema(map[string]any{
 				"project_path": map[string]any{"type": "string"},
 			})},
-		{"task_list", "列出近期任务卡（目标 / 状态 / 改动文件 / 下一步 / 未决问题）。",
+		{"task_list", "列出任务。kind=session 是一次 agent 对话产出的对话任务（含步骤），kind=formal 是跨对话整理的合并任务；不传 kind 返回全部。",
 			objectSchema(map[string]any{
 				"project_path": map[string]any{"type": "string"},
 				"status":       map[string]any{"type": "string", "enum": []string{"doing", "done", "blocked", "unknown"}},
+				"kind":         map[string]any{"type": "string", "enum": []string{"session", "formal"}},
 				"limit":        map[string]any{"type": "integer"},
 			})},
 		{"task_get", "按 id 取单张任务卡的全部内容。task_list 之后按需展开细节用这个，别把整份简报复述一遍。",

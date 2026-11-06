@@ -242,9 +242,26 @@ func TestStats_CountsAndGroupings(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// 首页「任务」磁贴取未归档任务数，归档的不能算进去。
+	yes := true
+	for i := 0; i < 2; i++ {
+		id, err := s.CreateTask(ctx, domain.Task{Goal: "统计用任务", ProjectID: 0, Status: domain.StatusDoing, CreatedAt: now, UpdatedAt: now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 1 {
+			if _, err := s.UpdateTask(ctx, TaskUpdate{ID: id, Archived: &yes}, now); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
 	stats, err := s.Stats(ctx)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if stats.Tasks != 1 {
+		t.Fatalf("tasks = %d, want 1（归档任务不计）", stats.Tasks)
 	}
 	if stats.Memories != 2 || stats.Stale != 1 || stats.Projects != 1 {
 		t.Fatalf("counts wrong: %+v", stats)

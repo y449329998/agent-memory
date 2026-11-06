@@ -13,10 +13,13 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/muyi99/agent-memory/internal/compose"
+	"github.com/muyi99/agent-memory/internal/config"
 	"github.com/muyi99/agent-memory/internal/domain"
+	"github.com/muyi99/agent-memory/internal/normalize"
 	"github.com/muyi99/agent-memory/internal/store"
 )
 
@@ -32,6 +35,14 @@ type Config struct {
 	// 简报预算与卡片数量由 serve 从配置带进来，handoff 端点不写死
 	BudgetTokens int
 	RecentCards  int
+	MCPBinary    string
+	ConfigPath   string
+	HomeDir      string
+	ReloadScan   func(context.Context, config.Config) error
+	ReloadLLM    func(config.Config) error
+	// SummaryEnabled 报告 LLM 摘要是否就绪（启用且 base_url/model/key 齐全）。
+	// 未注入或返回 false 时不创建摘要任务。
+	SummaryEnabled func() bool
 	// Scan 由 cmdServe 注入「扫一轮 + 刷新简报」的编排；未注入时 /v1/scan 回 501。
 	Scan func(context.Context) (map[string]any, error)
 	// Shutdown 由 cmdServe 注入；托盘「停止服务并退出」会调用它。
@@ -44,6 +55,12 @@ type Server struct {
 	cfg Config
 	st  *store.Store
 	mux *http.ServeMux
+
+	listenMu   sync.Mutex
+	httpServer *http.Server
+	listener   net.Listener
+	portPath   string
+	actualPort int
 }
 
 func New(cfg Config, st *store.Store) *Server {
@@ -56,6 +73,8 @@ func New(cfg Config, st *store.Store) *Server {
 	s.mux.HandleFunc("GET /tasks", s.handleTasksPage)
 	s.mux.HandleFunc("GET /t/new", s.handleTaskPage)
 	s.mux.HandleFunc("GET /t/{id}", s.handleTaskPage)
+	s.mux.HandleFunc("GET /mcp", s.handleMCPPage)
+	s.mux.HandleFunc("GET /settings", s.handleSettingsPage)
 	s.mux.HandleFunc("GET /assets/{file}", s.handleAsset)
 	s.mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /v1/stats", s.auth(s.handleStats))
@@ -74,6 +93,18 @@ func New(cfg Config, st *store.Store) *Server {
 	s.mux.HandleFunc("POST /v1/tasks/update", s.writeAuth(s.handleUpdateTask))
 	s.mux.HandleFunc("POST /v1/tasks/merge", s.writeAuth(s.handleMergeTask))
 	s.mux.HandleFunc("GET /v1/tasks/export", s.auth(s.handleExportTask))
+	s.mux.HandleFunc("GET /v1/mcp/snippets", s.auth(s.handleMCPSnippets))
+	s.mux.HandleFunc("GET /v1/settings", s.auth(s.handleSettingsGet))
+	s.mux.HandleFunc("POST /v1/settings/service", s.writeAuth(s.handleSettingsService))
+	s.mux.HandleFunc("POST /v1/settings/scan", s.writeAuth(s.handleSettingsScan))
+	s.mux.HandleFunc("POST /v1/settings/llm", s.writeAuth(s.handleSettingsLLM))
+	s.mux.HandleFunc("POST /v1/settings/llm/test", s.writeAuth(s.handleSettingsLLMTest))
+	s.mux.HandleFunc("POST /v1/settings/llm/retry", s.writeAuth(s.handleSettingsLLMRetry))
+	s.mux.HandleFunc("POST /v1/data/backup", s.writeAuth(s.handleDataBackup))
+	s.mux.HandleFunc("GET /v1/data/export", s.auth(s.handleDataExport))
+	s.mux.HandleFunc("POST /v1/data/import", s.writeAuth(s.handleDataImport))
+	s.mux.HandleFunc("POST /v1/data/import/apply", s.writeAuth(s.handleDataImportApply))
+	s.mux.HandleFunc("POST /v1/data/open", s.writeAuth(s.handleDataOpen))
 	s.mux.HandleFunc("POST /v1/project/resolve", s.auth(s.handleResolveProject))
 	s.mux.HandleFunc("POST /v1/scan", s.writeAuth(s.handleScan))
 	s.mux.HandleFunc("POST /v1/handoff", s.writeAuth(s.handleHandoffWrite))
@@ -208,16 +239,18 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			agents = append(agents, src.Agent)
 		}
 		out = append(out, map[string]any{
-			"id":           h.Memory.ID,
-			"scope":        h.Memory.Scope,
-			"type":         h.Memory.Type,
-			"text":         h.Memory.Text,
-			"stale":        h.Memory.Stale,
-			"last_seen_at": h.Memory.LastSeenAt.Format(time.RFC3339),
-			"agents":       agents,
-			"sources":      h.Memory.Sources,
-			"score":        h.Score,
-			"origin":       h.Origin,
+			"id":            h.Memory.ID,
+			"scope":         h.Memory.Scope,
+			"type":          h.Memory.Type,
+			"text":          h.Memory.Text,
+			"stale":         h.Memory.Stale,
+			"summary":       h.Memory.Summary,
+			"summary_state": h.Memory.SummaryState,
+			"last_seen_at":  h.Memory.LastSeenAt.Format(time.RFC3339),
+			"agents":        agents,
+			"sources":       h.Memory.Sources,
+			"score":         h.Score,
+			"origin":        h.Origin,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"hits": out, "count": len(out)})
@@ -290,7 +323,30 @@ func (s *Server) addMemory(ctx context.Context, req addRequest) (addResult, erro
 			return addResult{}, err
 		}
 	}
+	s.markMemorySummary(ctx, id, req.Text)
 	return addResult{ID: id, Created: created, Scope: scope, Type: typ}, nil
+}
+
+func (s *Server) summaryEnabled() bool {
+	return s.cfg.SummaryEnabled != nil && s.cfg.SummaryEnabled()
+}
+
+func (s *Server) markMemorySummary(ctx context.Context, id int64, text string) {
+	if !s.summaryEnabled() {
+		return
+	}
+	_ = s.st.MarkSummaryPending(ctx, "memory", id, normalize.Hash(normalize.CanonicalText(text)), time.Now())
+}
+
+func (s *Server) markTaskSummary(ctx context.Context, id int64) {
+	if !s.summaryEnabled() {
+		return
+	}
+	source, err := s.st.TaskSummarySource(ctx, id)
+	if err != nil {
+		return
+	}
+	_ = s.st.MarkSummaryPending(ctx, "task", id, normalize.Hash(source), time.Now())
 }
 
 func (s *Server) handleAddMemory(w http.ResponseWriter, r *http.Request) {
@@ -337,6 +393,11 @@ func (s *Server) handleUpdateMemory(w http.ResponseWriter, r *http.Request) {
 		httpError(w, err)
 		return
 	}
+	target := req.ID
+	if merged != 0 {
+		target = merged
+	}
+	s.markMemorySummary(r.Context(), target, req.Text)
 	writeJSON(w, http.StatusOK, map[string]any{"id": req.ID, "merged_into": merged})
 }
 
@@ -576,32 +637,71 @@ func httpError(w http.ResponseWriter, err error) {
 // ListenAndServe 绑定回环地址并回填实际端口。端口为 0 时由系统分配，
 // 实际值写进 port 文件供 stdio 桥读取。
 func (s *Server) ListenAndServe(ctx context.Context, portPath string) error {
-	addr := net.JoinHostPort("127.0.0.1", fmt.Sprint(s.cfg.Port))
+	s.listenMu.Lock()
+	s.portPath = portPath
+	s.listenMu.Unlock()
+	if err := s.bind(ctx, s.cfg.Port); err != nil {
+		return err
+	}
+	<-ctx.Done()
+	s.listenMu.Lock()
+	srv := s.httpServer
+	s.listenMu.Unlock()
+	if srv != nil {
+		shutCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		srv.Shutdown(shutCtx)
+	}
+	if portPath != "" {
+		_ = os.Remove(portPath)
+	}
+	return nil
+}
+
+func (s *Server) listening() bool {
+	s.listenMu.Lock()
+	defer s.listenMu.Unlock()
+	return s.listener != nil
+}
+
+// Rebind 在同一进程内切换监听端口；新端口起不来时旧监听器保持不变。
+func (s *Server) Rebind(ctx context.Context, port int) error {
+	return s.bind(ctx, port)
+}
+
+func (s *Server) bind(ctx context.Context, port int) error {
+	addr := net.JoinHostPort("127.0.0.1", fmt.Sprint(port))
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("bind %s: %w", addr, err)
 	}
 	actual := ln.Addr().(*net.TCPAddr).Port
+	s.listenMu.Lock()
+	portPath := s.portPath
+	s.listenMu.Unlock()
 	if portPath != "" {
 		if err := WritePort(portPath, actual); err != nil {
 			ln.Close()
 			return err
 		}
-		defer os.Remove(portPath)
 	}
+	srv := &http.Server{Handler: s.mux, ReadHeaderTimeout: requestTimeout}
+	go func() { _ = srv.Serve(ln) }()
 
-	srv := &http.Server{
-		Handler:           s.mux,
-		ReadHeaderTimeout: requestTimeout,
-	}
-	go func() {
-		<-ctx.Done()
-		shutCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		srv.Shutdown(shutCtx)
-	}()
-	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
+	s.listenMu.Lock()
+	old := s.httpServer
+	s.httpServer = srv
+	s.listener = ln
+	s.actualPort = actual
+	s.listenMu.Unlock()
+	if old != nil {
+		// 调用方通常正运行在旧 server 的 handler 里（设置页改端口）；
+		// 同步 Shutdown 会等当前 handler 返回，形成自等。这里异步收尾。
+		go func() {
+			shutCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_ = old.Shutdown(shutCtx)
+		}()
 	}
 	return nil
 }

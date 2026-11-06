@@ -51,6 +51,8 @@ type Runner struct {
 	adapters []agent.Adapter
 	// SettleIdle 是「会话算写完」的空闲阈值，默认 5 分钟。
 	SettleIdle time.Duration
+	// Summarize 表示 LLM 摘要就绪；为 false 时不创建摘要队列。
+	Summarize bool
 }
 
 func New(st *store.Store, adapters ...agent.Adapter) *Runner {

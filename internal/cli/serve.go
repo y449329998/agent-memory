@@ -6,12 +6,15 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/muyi99/agent-memory/internal/agent"
@@ -19,6 +22,7 @@ import (
 	"github.com/muyi99/agent-memory/internal/daemon"
 	"github.com/muyi99/agent-memory/internal/ingest"
 	"github.com/muyi99/agent-memory/internal/store"
+	"github.com/muyi99/agent-memory/internal/summarize"
 )
 
 func init() {
@@ -29,7 +33,7 @@ func init() {
 func cmdServe(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	port := fs.Int("port", 0, "监听端口，0 表示随机")
+	port := fs.Int("port", 0, "监听端口；省略时用配置 server.port，显式 0 表示随机")
 	pollFlag := fs.Int("poll", 0, "轮询兜底间隔秒数，0 表示用配置 scan.interval")
 	debounce := fs.Duration("debounce", 2*time.Second, "事件去抖窗口")
 	noWatch := fs.Bool("no-watch", false, "只服务不扫描（调试用）")
@@ -48,7 +52,22 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		return reportError(stderr, err)
 	}
 
-	if err := refuseIfAlreadyRunning(*port, e.cfg.PortPath()); err != nil {
+	// 没显式给 --port 时跟随配置；显式 --port 0 仍表示随机端口。
+	portSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "port" {
+			portSet = true
+		}
+	})
+	listenPort := *port
+	if !portSet {
+		listenPort = e.cfg.Server.Port
+		if err := refuseIfAlreadyRunning(0, e.cfg.PortPath()); err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 1
+		}
+	}
+	if err := refuseIfAlreadyRunning(listenPort, e.cfg.PortPath()); err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 1
 	}
@@ -56,18 +75,51 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	adapters := buildAdapters(e.cfg)
-	scanOnce := newScanOnce(e.st, adapters, e.cfg, stdout)
+	scan := newScanController(ctx, e.st, e.cfg, stdout, *debounce, *pollFlag, !*noWatch)
+
+	var (
+		workerCancel context.CancelFunc
+		summaryReady atomic.Bool
+	)
+	startWorker := func(cfg config.Config) {
+		if workerCancel != nil {
+			workerCancel()
+			workerCancel = nil
+		}
+		ready := llmReady(cfg)
+		summaryReady.Store(ready)
+		if !ready {
+			return
+		}
+		key, _ := config.LoadLLMKey(cfg.LLMKeyPath())
+		workerCtx, cancel := context.WithCancel(ctx)
+		workerCancel = cancel
+		go (&summarize.Worker{
+			Store: e.st, Client: summarize.NewClient(cfg.LLM.BaseURL, key, cfg.LLM.Model, cfg.LLM.Timeout),
+			Interval: 5 * time.Second, MaxInputChar: cfg.LLM.MaxInputChars,
+			Log: log.New(stdout, "", log.LstdFlags),
+		}).Run(workerCtx)
+	}
+	startWorker(e.cfg)
 
 	srv := daemon.New(daemon.Config{
 		Token:        token,
 		DataDir:      e.cfg.DataDir,
-		Port:         *port,
+		Port:         listenPort,
 		BudgetTokens: e.cfg.Handoff.BudgetTokens,
 		RecentCards:  e.cfg.Handoff.RecentCards,
-		Shutdown:     stop,
+		MCPBinary:    e.cfg.MCP.BinaryPath,
+		ConfigPath:   config.ConfigPath(e.userHome),
+		HomeDir:      e.userHome,
+		ReloadLLM: func(cfg config.Config) error {
+			startWorker(cfg)
+			return nil
+		},
+		SummaryEnabled: summaryReady.Load,
+		ReloadScan:     scan.Reload,
+		Shutdown:       stop,
 		Scan: func(ctx context.Context) (map[string]any, error) {
-			res, err := scanOnce(ctx)
+			res, err := scan.Scan(ctx)
 			if err != nil {
 				return nil, err
 			}
@@ -75,12 +127,8 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		},
 	}, e.st)
 
-	if !*noWatch && len(adapters) > 0 {
-		go scanLoop(ctx, scanOnce, adapters, *debounce, resolvePollSeconds(*pollFlag, e.cfg.Scan.Interval), stdout)
-	}
-
 	fmt.Fprintf(stdout, "serve on 127.0.0.1 (token: %s)\n", e.cfg.TokenPath())
-	fmt.Fprintf(stdout, "agents: %v\n", adapterNames(adapters))
+	fmt.Fprintf(stdout, "agents: %v\n", scan.AgentNames())
 	if err := srv.ListenAndServe(ctx, e.cfg.PortPath()); err != nil {
 		return reportError(stderr, err)
 	}
@@ -117,12 +165,12 @@ func scanResult(res ingest.Result) map[string]any {
 }
 
 // newScanOnce 返回「扫一轮 + 刷新简报」的共享入口：serve 的启动/事件扫描与
-// Web UI 的 /v1/scan 都调它，避免两套编排漂移。内部用信号量串行化，
-// 事件扫描与手动触发撞车时排队，而不是并发争抢 SQLite。
-func newScanOnce(st *store.Store, adapters []agent.Adapter, cfg config.Config, stdout io.Writer) func(context.Context) (ingest.Result, error) {
+// Web UI 的 /v1/scan 都调它，避免两套编排漂移。sem 由 scanController 共享，
+// 扫描器热重载后新旧入口仍按同一把锁排队，不会并发争抢 SQLite。
+func newScanOnce(st *store.Store, adapters []agent.Adapter, cfg config.Config, sem chan struct{}, stdout io.Writer) func(context.Context) (ingest.Result, error) {
 	runner := ingest.New(st, adapters...)
 	runner.SettleIdle = cfg.Handoff.SettleIdle
-	sem := make(chan struct{}, 1)
+	runner.Summarize = llmReady(cfg)
 	return func(ctx context.Context) (ingest.Result, error) {
 		select {
 		case sem <- struct{}{}:
@@ -137,6 +185,83 @@ func newScanOnce(st *store.Store, adapters []agent.Adapter, cfg config.Config, s
 		refreshHandoffsFor(ctx, st, cfg, stdout)
 		return res, nil
 	}
+}
+
+// llmReady 判断摘要能力是否完整可用；缺任何一项都不排队、不启动 worker。
+func llmReady(cfg config.Config) bool {
+	if !cfg.LLM.Enabled || strings.TrimSpace(cfg.LLM.BaseURL) == "" || strings.TrimSpace(cfg.LLM.Model) == "" {
+		return false
+	}
+	key, err := config.LoadLLMKey(cfg.LLMKeyPath())
+	return err == nil && strings.TrimSpace(key) != ""
+}
+
+// scanController 持有当前扫描器与监听循环，设置页保存扫描/LLM 配置后可原地重建，
+// 不必重启 serve。旧循环先取消，再让新循环做一次启动扫描。
+type scanController struct {
+	baseCtx  context.Context
+	st       *store.Store
+	stdout   io.Writer
+	debounce time.Duration
+	pollFlag int
+	watch    bool
+	sem      chan struct{}
+
+	mu      sync.Mutex
+	current func(context.Context) (ingest.Result, error)
+	cancel  context.CancelFunc
+	agents  []agent.Adapter
+}
+
+func newScanController(baseCtx context.Context, st *store.Store, cfg config.Config, stdout io.Writer, debounce time.Duration, pollFlag int, watch bool) *scanController {
+	c := &scanController{
+		baseCtx: baseCtx, st: st, stdout: stdout,
+		debounce: debounce, pollFlag: pollFlag, watch: watch,
+		sem: make(chan struct{}, 1),
+	}
+	c.apply(cfg)
+	return c
+}
+
+func (c *scanController) apply(cfg config.Config) {
+	adapters := buildAdapters(cfg)
+	once := newScanOnce(c.st, adapters, cfg, c.sem, c.stdout)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cancel != nil {
+		c.cancel()
+		c.cancel = nil
+	}
+	c.current = once
+	c.agents = adapters
+	if !c.watch || len(adapters) == 0 {
+		return
+	}
+	loopCtx, cancel := context.WithCancel(c.baseCtx)
+	c.cancel = cancel
+	go scanLoop(loopCtx, once, adapters, c.debounce, resolvePollSeconds(c.pollFlag, cfg.Scan.Interval), c.stdout)
+}
+
+func (c *scanController) Reload(_ context.Context, cfg config.Config) error {
+	c.apply(cfg)
+	return nil
+}
+
+func (c *scanController) Scan(ctx context.Context) (ingest.Result, error) {
+	c.mu.Lock()
+	once := c.current
+	c.mu.Unlock()
+	if once == nil {
+		return ingest.Result{}, fmt.Errorf("扫描器尚未初始化")
+	}
+	return once(ctx)
+}
+
+func (c *scanController) AgentNames() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return adapterNames(c.agents)
 }
 
 // scanLoop 启动先扫一次，之后由监听事件驱动。扫描期间收到的事件靠 channel 合并成一次补扫。

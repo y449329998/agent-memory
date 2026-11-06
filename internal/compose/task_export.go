@@ -14,7 +14,11 @@ func RenderTaskExport(task domain.Task, snippets []domain.TaskSnippet, project d
 	fmt.Fprintf(&b, "- 项目: %s (`%s`)\n", project.DisplayName, project.Key)
 	fmt.Fprintf(&b, "- 目标: %s\n", oneLine(task.Goal))
 	fmt.Fprintf(&b, "- 状态: %s\n", task.Status)
-	fmt.Fprintf(&b, "- owner: %s\n\n", task.OwnerAgent)
+	fmt.Fprintf(&b, "- owner: %s\n", task.OwnerAgent)
+	if summary := readyTaskSummary(task); summary != "" {
+		fmt.Fprintf(&b, "- 摘要: %s\n", oneLine(summary))
+	}
+	b.WriteString("\n")
 	b.WriteString("## 步骤\n\n")
 	for _, step := range task.Steps {
 		mark := "[ ]"

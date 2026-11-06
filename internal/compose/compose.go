@@ -61,6 +61,20 @@ func EstimateTokens(s string) int {
 	return han + other/4 + 1
 }
 
+// recentTasks 先取人工整理过的合并任务；一条都没有才退回最近的对话任务。
+// 对话任务数量多且未经整理，直接进简报会把「进行中的任务」挤满碎片。
+func (c *Composer) recentTasks(ctx context.Context, projectID int64) ([]domain.Task, error) {
+	tasks, err := c.st.ListTasks(ctx, store.TaskFilter{
+		ProjectID: projectID, Kind: domain.TaskKindFormal, Limit: c.cfg.RecentCards,
+	})
+	if err != nil || len(tasks) > 0 {
+		return tasks, err
+	}
+	return c.st.ListTasks(ctx, store.TaskFilter{
+		ProjectID: projectID, Kind: domain.TaskKindSession, Limit: c.cfg.RecentCards,
+	})
+}
+
 // Render 生成简报。裁剪顺序是刻意的：先砍任务卡细节，再减卡片数量，最后截任务卡与未决问题；
 // 用户偏好与项目硬约束任何情况下都不砍——那是「不用从头描述」的最低保障。
 // 同样的库状态必须产出逐字节相同的正文，否则每次扫描都会重写 HANDOFF.md。
@@ -101,7 +115,7 @@ func (c *Composer) Render(ctx context.Context, projectID int64) (Result, error) 
 		return Result{}, err
 	}
 
-	tasks, err := c.st.ListTasks(ctx, store.TaskFilter{ProjectID: projectID, Limit: c.cfg.RecentCards})
+	tasks, err := c.recentTasks(ctx, projectID)
 	if err != nil {
 		return Result{}, err
 	}
@@ -317,7 +331,9 @@ func renderTasks(tasks []domain.Task, level detailLevel) string {
 			fmt.Fprintf(&b, " ｜ 当前: %s", oneLine(current))
 		}
 		b.WriteString("\n")
-		if task.NextSteps != "" {
+		if summary := readyTaskSummary(task); summary != "" {
+			fmt.Fprintf(&b, "- 摘要: %s\n", clipPlain(summary, 400))
+		} else if task.NextSteps != "" {
 			fmt.Fprintf(&b, "- 下一步: %s\n", oneLine(task.NextSteps))
 		}
 		if level == cardDetailFull && len(task.Files) > 0 {
@@ -342,12 +358,21 @@ func renderTasksCompact(tasks []domain.Task) string {
 	b.WriteString("## 进行中的任务\n\n")
 	for _, task := range tasks {
 		fmt.Fprintf(&b, "- [%s] %s", task.Status, oneLine(task.Goal))
-		if task.NextSteps != "" {
+		if summary := readyTaskSummary(task); summary != "" {
+			fmt.Fprintf(&b, " — %s", clipPlain(summary, 160))
+		} else if task.NextSteps != "" {
 			fmt.Fprintf(&b, " — 下一步: %s", clipPlain(task.NextSteps, 120))
 		}
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+func readyTaskSummary(task domain.Task) string {
+	if task.SummaryState == "ready" {
+		return strings.TrimSpace(task.Summary)
+	}
+	return ""
 }
 
 func clipPlain(s string, n int) string {

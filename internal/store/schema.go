@@ -152,6 +152,8 @@ CREATE TABLE IF NOT EXISTS agent_link (
 CREATE TABLE IF NOT EXISTS task (
   id                  INTEGER PRIMARY KEY,
   project_id          INTEGER NOT NULL DEFAULT 0,
+  kind                TEXT NOT NULL DEFAULT 'formal',
+  session_id          INTEGER NOT NULL DEFAULT 0,
   goal                TEXT NOT NULL DEFAULT '',
   status              TEXT NOT NULL DEFAULT 'doing',
   owner_agent         TEXT NOT NULL DEFAULT '',
@@ -205,6 +207,20 @@ CREATE TABLE IF NOT EXISTS task_session (
   PRIMARY KEY(task_id, session_id)
 );
 
+CREATE TABLE IF NOT EXISTS summary (
+  entity_kind  TEXT NOT NULL,
+  entity_id    INTEGER NOT NULL,
+  source_hash  TEXT NOT NULL,
+  summary      TEXT NOT NULL DEFAULT '',
+  state        TEXT NOT NULL DEFAULT 'pending',
+  model        TEXT NOT NULL DEFAULT '',
+  error        TEXT NOT NULL DEFAULT '',
+  attempts     INTEGER NOT NULL DEFAULT 0,
+  requested_at INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL,
+  PRIMARY KEY(entity_kind, entity_id)
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
   text_seg,
   tokenize = 'unicode61'
@@ -219,6 +235,8 @@ CREATE INDEX IF NOT EXISTS idx_task_project ON task(project_id, archived_at, sta
 CREATE INDEX IF NOT EXISTS idx_task_owner ON task(owner_agent, status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_task_step_source ON task_step(task_id, source_key) WHERE source_key <> '';
 CREATE INDEX IF NOT EXISTS idx_task_snippet_task ON task_snippet(task_id, seq);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session ON task(session_id) WHERE kind = 'session';
+CREATE INDEX IF NOT EXISTS idx_task_kind ON task(kind, archived_at, project_id);
 `
 
-const schemaVersion = "1"
+const schemaVersion = "2"

@@ -28,6 +28,8 @@ func TestPagesServeShells(t *testing.T) {
 		{"/tasks", `data-view="tasks"`},
 		{"/t/new", `data-view="task"`},
 		{"/t/1", `data-view="task" data-task-id="1"`},
+		{"/mcp", `data-view="mcp"`},
+		{"/settings", `data-view="settings"`},
 	}
 	for _, c := range cases {
 		rec := webDo(t, s, http.MethodGet, c.path, "", nil, nil)
@@ -49,6 +51,21 @@ func TestPagesServeShells(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `data-key="e:/company/nuonuo-fresh3-api"`) {
 		t.Fatalf("project key must be decoded into data-key: %s", rec.Body.String())
 	}
+	for path, marker := range map[string]string{
+		"/mcp": `id="mcp-code"`, "/settings": `class="settings-layout"`,
+		"/tasks": `id="tf-kind"`, "/": `id="stat-tasks"`,
+	} {
+		rec := webDo(t, s, http.MethodGet, path, "", nil, nil)
+		if !strings.Contains(rec.Body.String(), marker) {
+			t.Fatalf("%s missing %q", path, marker)
+		}
+	}
+	if rec := webDo(t, s, http.MethodGet, "/", "", nil, nil); strings.Contains(rec.Body.String(), "失败源") {
+		t.Fatal("首页数字磁贴应已换成任务数，不再显示失败源")
+	}
+	if rec := webDo(t, s, http.MethodGet, "/", "", nil, nil); !strings.Contains(rec.Body.String(), `href="/assets/app.png"`) {
+		t.Fatal("页面必须挂上海豚图标作为 favicon")
+	}
 }
 
 func TestAssets(t *testing.T) {
@@ -66,6 +83,10 @@ func TestAssets(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "initHome") {
 		t.Fatal("js should contain the page bootstrap")
+	}
+	rec = webDo(t, s, http.MethodGet, "/assets/app.png", "", nil, nil)
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "image/png" || rec.Body.Len() < 512 {
+		t.Fatalf("icon: code=%d type=%q bytes=%d", rec.Code, rec.Header().Get("Content-Type"), rec.Body.Len())
 	}
 	rec = webDo(t, s, http.MethodGet, "/assets/secret.txt", "", nil, nil)
 	if rec.Code != http.StatusNotFound {

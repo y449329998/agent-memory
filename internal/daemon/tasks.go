@@ -90,6 +90,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		httpError(w, err)
 		return
 	}
+	s.markTaskSummary(r.Context(), id)
 	s.refreshTaskHandoff(r.Context(), project)
 	writeJSON(w, http.StatusOK, map[string]any{"id": id})
 }
@@ -108,10 +109,29 @@ func (s *Server) handleListFormalTasks(w http.ResponseWriter, r *http.Request) {
 	if limit <= 0 {
 		limit = 50
 	}
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	after, _ := parseTaskTime(r.URL.Query().Get("updated_after"))
+	before, _ := parseTaskTime(r.URL.Query().Get("updated_before"))
 	includeArchived := r.URL.Query().Get("include_archived") == "1"
+	sort := r.URL.Query().Get("sort")
+	switch sort {
+	case "created", "idle":
+	default:
+		sort = ""
+	}
+	kind := r.URL.Query().Get("kind")
+	switch kind {
+	case domain.TaskKindSession, domain.TaskKindFormal:
+	default:
+		kind = ""
+	}
 	tasks, err := s.st.ListTasks(r.Context(), store.TaskFilter{
-		ProjectID: projectID, Status: r.URL.Query().Get("status"),
-		IncludeArchived: includeArchived, Limit: limit,
+		ProjectID: projectID, Query: r.URL.Query().Get("q"),
+		Status:       r.URL.Query().Get("status"),
+		OwnerAgent:   r.URL.Query().Get("owner_agent"),
+		SourceAgent:  r.URL.Query().Get("source_agent"),
+		UpdatedAfter: after, UpdatedBefore: before,
+		IncludeArchived: includeArchived, Kind: kind, Sort: sort, Limit: limit, Offset: offset,
 	})
 	if err != nil {
 		httpError(w, err)
@@ -161,6 +181,7 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		httpError(w, err)
 		return
 	}
+	s.markTaskSummary(r.Context(), task.ID)
 	s.refreshTaskHandoff(r.Context(), task.ProjectID)
 	writeJSON(w, http.StatusOK, task)
 }
@@ -178,6 +199,7 @@ func (s *Server) handleMergeTask(w http.ResponseWriter, r *http.Request) {
 		httpError(w, err)
 		return
 	}
+	s.markTaskSummary(r.Context(), req.TargetID)
 	s.refreshTaskHandoff(r.Context(), req.TargetID)
 	writeJSON(w, http.StatusOK, map[string]any{"source_id": req.SourceID, "target_id": req.TargetID})
 }
@@ -230,4 +252,18 @@ func (s *Server) refreshTaskHandoff(ctx context.Context, projectID int64) {
 	if len(dirs) == 0 && project.PrimaryPath != "" && !surface.IsProtectedAgentDir(project.PrimaryPath) {
 		_, _, _ = surface.WriteHandoff(project.PrimaryPath, res.Body)
 	}
+}
+
+func parseTaskTime(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
+	if ts, err := time.Parse(time.RFC3339, value); err == nil {
+		return ts, true
+	}
+	if ts, err := time.Parse("2006-01-02", value); err == nil {
+		return ts, true
+	}
+	return time.Time{}, false
 }

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,11 +22,35 @@ const (
 
 type Config struct {
 	DataDir   string          `toml:"data_dir"`
+	Server    ServerConfig    `toml:"server"`
+	Desktop   DesktopConfig   `toml:"desktop"`
+	MCP       MCPConfig       `toml:"mcp"`
 	Qoder     QoderConfig     `toml:"qoder"`
 	Trae      TraeConfig      `toml:"trae"`
 	WorkBuddy WorkBuddyConfig `toml:"workbuddy"`
 	Scan      ScanConfig      `toml:"scan"`
 	Handoff   HandoffConfig   `toml:"handoff"`
+	LLM       LLMConfig       `toml:"llm"`
+}
+
+type ServerConfig struct {
+	Port int `toml:"port"`
+}
+
+type DesktopConfig struct {
+	CloseToTray bool `toml:"close_to_tray"`
+}
+
+type MCPConfig struct {
+	BinaryPath string `toml:"binary_path"`
+}
+
+type LLMConfig struct {
+	Enabled       bool          `toml:"enabled"`
+	BaseURL       string        `toml:"base_url"`
+	Model         string        `toml:"model"`
+	Timeout       time.Duration `toml:"timeout"`
+	MaxInputChars int           `toml:"max_input_chars"`
 }
 
 type QoderConfig struct {
@@ -63,11 +88,14 @@ type HandoffConfig struct {
 func Default(userHome string) Config {
 	return Config{
 		DataDir: filepath.Join(userHome, dirName),
+		Server:  ServerConfig{Port: 47123},
+		Desktop: DesktopConfig{CloseToTray: true},
 		Qoder:   QoderConfig{},
 		Scan:    ScanConfig{Interval: defaultInterval},
 		// 1500 实测放不下真实项目：全局偏好与项目约束本身约 2.3k token，
 		// 任务卡与未决问题会被整段裁掉。全量六节约 3.5k token，留出余量取 4000。
 		Handoff: HandoffConfig{BudgetTokens: 4000, RecentCards: 3, SettleIdle: 5 * time.Minute},
+		LLM:     LLMConfig{Timeout: 30 * time.Second, MaxInputChars: 12000},
 	}
 }
 
@@ -81,6 +109,9 @@ func (c Config) DBPath() string { return filepath.Join(c.DataDir, "memory.db") }
 // 放在 DataDir 下：配置改了数据目录，令牌与端口也必须跟着走。
 func (c Config) TokenPath() string { return filepath.Join(c.DataDir, "token") }
 func (c Config) PortPath() string  { return filepath.Join(c.DataDir, "port") }
+func (c Config) LLMKeyPath() string {
+	return filepath.Join(c.DataDir, "llm.key")
+}
 
 // QoderHome 返回 Qoder 配置根；显式配置优先，其次自动发现，禁用时返回空串。
 func (c Config) QoderHome() string {
@@ -234,6 +265,15 @@ func Load(path, userHome string) (Config, error) {
 	if c.DataDir == "" {
 		c.DataDir = Default(userHome).DataDir
 	}
+	if c.Server.Port <= 0 {
+		c.Server.Port = 47123
+	}
+	if c.LLM.Timeout <= 0 {
+		c.LLM.Timeout = 30 * time.Second
+	}
+	if c.LLM.MaxInputChars <= 0 {
+		c.LLM.MaxInputChars = 12000
+	}
 	if c.Scan.Interval <= 0 {
 		c.Scan.Interval = defaultInterval
 	}
@@ -250,16 +290,24 @@ func Load(path, userHome string) (Config, error) {
 }
 
 // Save 写出配置文件。权限 0600：将来这里会放 LLM 端点等敏感项。
+// 先写同目录临时文件再改名，避免设置页保存到一半断电留下半个 TOML。
 func Save(path string, c Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(c); err != nil {
 		return err
 	}
-	defer f.Close()
-	return toml.NewEncoder(f).Encode(c)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, buf.Bytes(), 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // AppLogPath 是桌面应用与服务子进程共用的日志文件。

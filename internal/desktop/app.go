@@ -103,10 +103,24 @@ func Run(ctx context.Context, opts Options) error {
 	link := buildURL(port, token)
 
 	quit := make(chan struct{}, 1)
+	// 端口可能在设置页被热切换；托盘动作与重新开窗都从 port 文件取当前值，
+	// 不用启动时缓存的端口。
+	currentPort := func() int {
+		if p, err := daemon.ReadPort(cfg.PortPath()); err == nil && p > 0 {
+			return p
+		}
+		return port
+	}
+	currentLink := func() string { return buildURL(currentPort(), token) }
+	stopServe := func() {
+		if err := postJSON(currentPort(), token, "/v1/shutdown"); err != nil {
+			logger.Printf("停止服务失败：%v", err)
+		}
+	}
 	actions := trayActions{
 		OpenWindow: showAppWindow,
 		Sync: func() {
-			if err := postJSON(port, token, "/v1/scan"); err != nil {
+			if err := postJSON(currentPort(), token, "/v1/scan"); err != nil {
 				logger.Printf("托盘同步失败：%v", err)
 			}
 		},
@@ -118,9 +132,7 @@ func Run(ctx context.Context, opts Options) error {
 		AutostartOn: func() bool { on, _ := autostartEnabled(); return on },
 		ToggleAuto:  func(v bool) error { return setAutostart(v, opts.SelfPath) },
 		StopAndQuit: func() {
-			if err := postJSON(port, token, "/v1/shutdown"); err != nil {
-				logger.Printf("停止服务失败：%v", err)
-			}
+			stopServe()
 			select {
 			case quit <- struct{}{}:
 			default:
@@ -139,6 +151,11 @@ func Run(ctx context.Context, opts Options) error {
 
 	if !opts.TrayOnly {
 		openWindowOnce(link, cfg, logger)
+		if !closeToTray(opts.UserHome, cfg) {
+			logger.Printf("close_to_tray=false：窗口关闭后停止服务并退出")
+			stopServe()
+			return nil
+		}
 	}
 	for {
 		select {
@@ -148,11 +165,28 @@ func Run(ctx context.Context, opts Options) error {
 			// 托盘没了就没有再打开窗口的入口，直接退出，避免留下不可达的进程。
 			return nil
 		case <-takeWindowRequest():
-			openWindowOnce(link, cfg, logger)
+			openWindowOnce(currentLink(), cfg, logger)
+			if !closeToTray(opts.UserHome, cfg) {
+				logger.Printf("close_to_tray=false：窗口关闭后停止服务并退出")
+				stopServe()
+				return nil
+			}
 		case <-ctx.Done():
 			return nil
 		}
 	}
+}
+
+// closeToTray 每次关窗都重新读取配置，设置页改完无需重启桌面进程。
+func closeToTray(userHome string, fallback config.Config) bool {
+	if userHome == "" {
+		return fallback.Desktop.CloseToTray
+	}
+	cfg, err := config.Load(config.ConfigPath(userHome), userHome)
+	if err != nil {
+		return fallback.Desktop.CloseToTray
+	}
+	return cfg.Desktop.CloseToTray
 }
 
 // bootConfig 合并「准备配置/数据库」与「打开日志」两步。
@@ -178,7 +212,7 @@ func ensureServe(ctx context.Context, selfPath string, cfg config.Config, logger
 	_, port, err := startServe(ctx, selfPath, cfg)
 	if err != nil {
 		logger.Printf("启动 serve 失败：%v", err)
-		return 0, fmt.Errorf("启动共享记忆服务失败（端口 %d 可能被占用）：%w", preferredPort, err)
+		return 0, fmt.Errorf("启动共享记忆服务失败（端口 %d 可能被占用）：%w", configuredServePort(cfg), err)
 	}
 	logger.Printf("已启动内置 serve：端口 %d（关窗后继续运行）", port)
 	return port, nil
@@ -260,17 +294,24 @@ func postJSON(port int, token, path string) error {
 	return nil
 }
 
-// preferredPort 与 `link` 写进 agent 配置的端口保持一致：
-// 桌面版若随机取端口，MCP 桥会连不上写死端口的那份配置。
+// preferredPort 仅在配置没有写端口时兜底。实际端口以 config.Server.Port 为准，
+// 这样设置页改完端口后，下次双击桌面应用仍从同一个端口启动。
 const preferredPort = 47123
 
-// startServe 以 `selfPath --serve --port 47123` 拉起自身作为 serve 子进程。
-// 固定端口是为了与 link 生成的 MCP 配置对齐；子进程不绑定父进程的 ctx，
-// 窗口关闭后它要继续为 agent 的 MCP 调用服务。
+func configuredServePort(cfg config.Config) int {
+	if cfg.Server.Port > 0 {
+		return cfg.Server.Port
+	}
+	return preferredPort
+}
+
+// startServe 以 `selfPath --serve --port <配置端口>` 拉起自身作为 serve 子进程。
+// 子进程不绑定父进程的 ctx，窗口关闭后它要继续为 agent 的 MCP 调用服务。
 // 调用方必须确认没有健康实例在运行：这里会删掉可能残留的 port 文件。
 func startServe(ctx context.Context, selfPath string, cfg config.Config) (*exec.Cmd, int, error) {
+	port := configuredServePort(cfg)
 	return startServeWith(ctx, cfg, serveStartTimeout, func(context.Context) (*exec.Cmd, error) {
-		cmd := exec.Command(selfPath, "--serve", "--port", fmt.Sprint(preferredPort))
+		cmd := exec.Command(selfPath, "--serve", "--port", fmt.Sprint(port))
 		prepareChild(cmd)
 		return cmd, nil
 	})

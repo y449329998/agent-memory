@@ -36,6 +36,7 @@ func (s *Server) Search(ctx context.Context, in mcp.SearchInput) (any, error) {
 		out = append(out, map[string]any{
 			"id": h.Memory.ID, "scope": h.Memory.Scope, "type": h.Memory.Type,
 			"text": h.Memory.Text, "stale": h.Memory.Stale,
+			"summary": h.Memory.Summary, "summary_state": h.Memory.SummaryState,
 			"last_seen_at": h.Memory.LastSeenAt.Format(time.RFC3339),
 			"sources":      h.Memory.Sources, "score": h.Score, "origin": h.Origin,
 		})
@@ -51,7 +52,14 @@ func (s *Server) Add(ctx context.Context, in mcp.AddInput) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"id": res.ID, "created": res.Created, "scope": res.Scope, "type": res.Type}, nil
+	state := ""
+	if row, ok, err := s.st.SummaryFor(ctx, "memory", res.ID); err == nil && ok {
+		state = row.State
+	}
+	return map[string]any{
+		"id": res.ID, "created": res.Created, "scope": res.Scope, "type": res.Type,
+		"summary_state": state,
+	}, nil
 }
 
 func (s *Server) List(ctx context.Context, in mcp.ListInput) (any, error) {
@@ -98,8 +106,14 @@ func (s *Server) Tasks(ctx context.Context, in mcp.TaskInput) (any, error) {
 	if limit <= 0 {
 		limit = 5
 	}
+	kind := in.Kind
+	switch kind {
+	case domain.TaskKindSession, domain.TaskKindFormal:
+	default:
+		kind = ""
+	}
 	tasks, err := s.st.ListTasks(ctx, store.TaskFilter{
-		ProjectID: projectID, Status: in.Status, IncludeArchived: in.IncludeArchived, Limit: limit,
+		ProjectID: projectID, Status: in.Status, Kind: kind, IncludeArchived: in.IncludeArchived, Limit: limit,
 	})
 	if err != nil {
 		return nil, err
@@ -140,6 +154,7 @@ func (s *Server) AddTask(ctx context.Context, in mcp.AddTaskInput) (any, error) 
 	if err != nil {
 		return nil, err
 	}
+	s.markTaskSummary(ctx, id)
 	s.refreshTaskHandoff(ctx, projectID)
 	return map[string]any{"id": id}, nil
 }
@@ -163,6 +178,7 @@ func (s *Server) UpdateTask(ctx context.Context, in mcp.UpdateTaskInput) (any, e
 	if err != nil {
 		return nil, err
 	}
+	s.markTaskSummary(ctx, task.ID)
 	s.refreshTaskHandoff(ctx, task.ProjectID)
 	return task, nil
 }

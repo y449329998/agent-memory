@@ -5,6 +5,8 @@ import "time"
 type Task struct {
 	ID               int64
 	ProjectID        int64
+	Kind             string
+	SessionID        int64
 	Goal             string
 	Status           string
 	OwnerAgent       string
@@ -24,6 +26,9 @@ type Task struct {
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 	Steps            []TaskStep
+	Summary          string `json:"summary,omitempty"`
+	SummaryState     string `json:"summary_state,omitempty"`
+	SummaryError     string `json:"summary_error,omitempty"`
 }
 
 type TaskStep struct {
@@ -66,4 +71,11 @@ const (
 	StepDone    = "done"
 	StepBlocked = "blocked"
 	StepSkipped = "skipped"
+)
+
+// 任务分两种：session 是某个 agent 里的一次对话任务（扫描产出，一条会话一条），
+// formal 是手工创建或把多条对话合并出来的任务。
+const (
+	TaskKindSession = "session"
+	TaskKindFormal  = "formal"
 )

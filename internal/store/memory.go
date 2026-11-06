@@ -219,6 +219,11 @@ FROM memory_item WHERE id = ?`, id).Scan(
 		return domain.MemoryItem{}, err
 	}
 	m.Sources = sources
+	if summary, ok, err := s.SummaryFor(ctx, "memory", id); err != nil {
+		return domain.MemoryItem{}, err
+	} else if ok {
+		m.Summary, m.SummaryState, m.SummaryError = summary.Summary, summary.State, summary.Error
+	}
 	return m, nil
 }
 

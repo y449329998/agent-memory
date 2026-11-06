@@ -78,6 +78,9 @@ type MemoryItem struct {
 	EmbedDim     int
 	EmbeddedAt   time.Time
 	Sources      []MemorySource
+	Summary      string `json:"summary,omitempty"`
+	SummaryState string `json:"summary_state,omitempty"`
+	SummaryError string `json:"summary_error,omitempty"`
 }
 
 type Project struct {
@@ -133,6 +136,7 @@ type Stats struct {
 	Stale           int            `json:"stale"`
 	Sources         int            `json:"sources"`
 	FailedSource    int            `json:"failed_source"`
+	Tasks           int            `json:"tasks"`
 	Changed         int            `json:"changed"`
 	MemoriesByAgent map[string]int `json:"memories_by_agent"`
 	MemoriesByType  map[string]int `json:"memories_by_type"`

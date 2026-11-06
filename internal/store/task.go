@@ -14,8 +14,15 @@ import (
 
 type TaskFilter struct {
 	ProjectID       int64
+	Query           string
 	Status          string
+	OwnerAgent      string
+	SourceAgent     string
+	UpdatedAfter    time.Time
+	UpdatedBefore   time.Time
 	IncludeArchived bool
+	Kind            string
+	Sort            string
 	Limit           int
 	Offset          int
 }
@@ -34,6 +41,14 @@ type TaskDetail struct {
 	domain.Task
 	Snippets []domain.TaskSnippet
 	Sessions []domain.TaskSession
+}
+
+func validTaskKind(k string) bool {
+	switch k {
+	case domain.TaskKindSession, domain.TaskKindFormal:
+		return true
+	}
+	return false
 }
 
 func validTaskStatus(s string) bool {
@@ -68,6 +83,15 @@ func (s *Store) CreateTask(ctx context.Context, task domain.Task) (int64, error)
 	if task.Status != domain.StatusDone {
 		task.CompletedAt = time.Time{}
 	}
+	if task.Kind == "" {
+		task.Kind = domain.TaskKindFormal
+	}
+	if !validTaskKind(task.Kind) {
+		return 0, fmt.Errorf("invalid task kind %q", task.Kind)
+	}
+	if task.Kind == domain.TaskKindSession && task.SessionID == 0 {
+		return 0, errors.New("session task requires session_id")
+	}
 	if task.OwnerAgent != "" && task.ClaimedAt.IsZero() {
 		task.ClaimedAt = task.UpdatedAt
 	}
@@ -81,12 +105,12 @@ func (s *Store) CreateTask(ctx context.Context, task domain.Task) (int64, error)
 	commands, _ := marshalList(task.Commands)
 	errorsJSON, _ := marshalList(task.Errors)
 	res, err := tx.ExecContext(ctx, `
-INSERT INTO task(project_id, goal, status, owner_agent, claimed_at, next_steps,
+INSERT INTO task(project_id, kind, session_id, goal, status, owner_agent, claimed_at, next_steps,
   decisions_json, files_json, commands_json, errors_json, open_questions,
   source_agent, source_path, manual_edited_at, completed_at, archived_at,
   created_at, updated_at)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-		task.ProjectID, task.Goal, task.Status, task.OwnerAgent, unixOrZero(task.ClaimedAt),
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+		task.ProjectID, task.Kind, task.SessionID, task.Goal, task.Status, task.OwnerAgent, unixOrZero(task.ClaimedAt),
 		task.NextSteps, decisions, files, commands, errorsJSON, task.OpenQuestions,
 		task.SourceAgent, task.SourcePath, unixOrZero(task.ManualEditedAt),
 		unixOrZero(task.CompletedAt), unixOrZero(task.CreatedAt), unixOrZero(task.UpdatedAt))
@@ -135,7 +159,7 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 
 func (s *Store) TaskByID(ctx context.Context, id int64) (domain.Task, bool, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT id, project_id, goal, status, owner_agent, claimed_at, next_steps,
+SELECT id, project_id, kind, session_id, goal, status, owner_agent, claimed_at, next_steps,
   decisions_json, files_json, commands_json, errors_json, open_questions,
   source_agent, source_path, manual_edited_at, completed_at, archived_at,
   merged_into_task_id, created_at, updated_at
@@ -150,6 +174,11 @@ FROM task WHERE id = ?`, id)
 	if task.Steps, err = s.taskSteps(ctx, id); err != nil {
 		return domain.Task{}, false, err
 	}
+	if summary, ok, err := s.SummaryFor(ctx, "task", id); err != nil {
+		return domain.Task{}, false, err
+	} else if ok {
+		task.Summary, task.SummaryState, task.SummaryError = summary.Summary, summary.State, summary.Error
+	}
 	return task, true, nil
 }
 
@@ -160,7 +189,7 @@ func scanTaskRow(row *sql.Row) (domain.Task, error) {
 		claimed, manual, completed   int64
 		archived, created, updated   int64
 	)
-	err := row.Scan(&task.ID, &task.ProjectID, &task.Goal, &task.Status, &task.OwnerAgent,
+	err := row.Scan(&task.ID, &task.ProjectID, &task.Kind, &task.SessionID, &task.Goal, &task.Status, &task.OwnerAgent,
 		&claimed, &task.NextSteps, &decisions, &files, &cmds, &errs, &task.OpenQuestions,
 		&task.SourceAgent, &task.SourcePath, &manual, &completed, &archived,
 		&task.MergedIntoTaskID, &created, &updated)
@@ -209,11 +238,18 @@ func (s *Store) ListTasks(ctx context.Context, f TaskFilter) ([]domain.Task, err
 	if f.Limit <= 0 || f.Limit > 100 {
 		f.Limit = 20
 	}
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
 	q := `SELECT id FROM task WHERE 1 = 1`
 	args := []any{}
 	if f.ProjectID != 0 {
 		q += ` AND project_id = ?`
 		args = append(args, f.ProjectID)
+	}
+	if f.Kind != "" {
+		q += ` AND kind = ?`
+		args = append(args, f.Kind)
 	}
 	if !f.IncludeArchived {
 		q += ` AND archived_at = 0`
@@ -222,7 +258,43 @@ func (s *Store) ListTasks(ctx context.Context, f TaskFilter) ([]domain.Task, err
 		q += ` AND status = ?`
 		args = append(args, f.Status)
 	}
-	q += ` ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?`
+	if query := strings.TrimSpace(f.Query); query != "" {
+		like := "%" + query + "%"
+		q += ` AND (goal LIKE ? OR next_steps LIKE ? OR files_json LIKE ? OR EXISTS (
+		  SELECT 1 FROM task_step ts WHERE ts.task_id = task.id
+		  AND (ts.subject LIKE ? OR ts.description LIKE ?)))`
+		args = append(args, like, like, like, like, like)
+	}
+	if f.OwnerAgent != "" {
+		q += ` AND owner_agent = ?`
+		args = append(args, f.OwnerAgent)
+	}
+	if f.SourceAgent != "" {
+		q += ` AND source_agent = ?`
+		args = append(args, f.SourceAgent)
+	}
+	if !f.UpdatedAfter.IsZero() {
+		q += ` AND updated_at >= ?`
+		args = append(args, f.UpdatedAfter.Unix())
+	}
+	if !f.UpdatedBefore.IsZero() {
+		q += ` AND updated_at <= ?`
+		args = append(args, f.UpdatedBefore.Unix())
+	}
+	// activity 把任务本体、步骤与片段的时间合成一个「最近有内容」时刻，
+	// 只按 updated_at 排会让补录步骤或新片段的老任务沉底。
+	const activity = `MAX(task.updated_at,
+	  IFNULL((SELECT MAX(ts.updated_at) FROM task_step ts WHERE ts.task_id = task.id), 0),
+	  IFNULL((SELECT MAX(sn.ts) FROM task_snippet sn WHERE sn.task_id = task.id), 0))`
+	switch f.Sort {
+	case "created":
+		q += ` ORDER BY created_at DESC, id DESC`
+	case "idle":
+		q += ` ORDER BY ` + activity + ` ASC, id ASC`
+	default:
+		q += ` ORDER BY ` + activity + ` DESC, id DESC`
+	}
+	q += ` LIMIT ? OFFSET ?`
 	args = append(args, f.Limit, f.Offset)
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -391,42 +463,22 @@ ON CONFLICT(task_id, session_id) DO NOTHING`, taskID, sessionID, role, at.Unix()
 	return err
 }
 
-func (s *Store) TaskBySession(ctx context.Context, sessionID int64) (domain.Task, bool, error) {
-	var taskID int64
-	err := s.db.QueryRowContext(ctx, `SELECT task_id FROM task_session WHERE session_id = ? ORDER BY created_at LIMIT 1`, sessionID).Scan(&taskID)
+// TaskByKindSession 按会话主键取对话任务。task.session_id 是唯一权威绑定，
+// 不再从 task_session 反查：合并视图也会写 task_session，反查会把对话任务
+// 错认成某个合并任务。
+func (s *Store) TaskByKindSession(ctx context.Context, sessionID int64) (domain.Task, bool, error) {
+	if sessionID == 0 {
+		return domain.Task{}, false, nil
+	}
+	var id int64
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM task WHERE kind = 'session' AND session_id = ?`, sessionID).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Task{}, false, nil
 	}
 	if err != nil {
 		return domain.Task{}, false, err
 	}
-	return s.TaskByID(ctx, taskID)
-}
-
-func (s *Store) FindAttachableTask(ctx context.Context, projectID int64, agent string) (domain.Task, bool, error) {
-	rows, err := s.db.QueryContext(ctx, `
-SELECT id FROM task
-WHERE project_id = ? AND archived_at = 0 AND status IN ('doing','blocked') AND owner_agent = ?
-ORDER BY updated_at DESC, id DESC LIMIT 2`, projectID, agent)
-	if err != nil {
-		return domain.Task{}, false, err
-	}
-	defer rows.Close()
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return domain.Task{}, false, err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return domain.Task{}, false, err
-	}
-	if len(ids) != 1 {
-		return domain.Task{}, false, nil
-	}
-	return s.TaskByID(ctx, ids[0])
+	return s.TaskByID(ctx, id)
 }
 
 func (s *Store) TaskDetail(ctx context.Context, id int64) (TaskDetail, bool, error) {

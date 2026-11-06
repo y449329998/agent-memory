@@ -405,3 +405,34 @@ func TestRenderIncludesFormalTaskSteps(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderTasksPrefersReadySummary(t *testing.T) {
+	task := domain.Task{
+		Goal: "实现导出", Status: domain.StatusDoing, NextSteps: "规则下一步",
+		Summary: "AI 交接摘要", SummaryState: "ready",
+	}
+	full := renderTasks([]domain.Task{task}, cardDetailFull)
+	if !strings.Contains(full, "摘要: AI 交接摘要") || strings.Contains(full, "下一步: 规则下一步") {
+		t.Fatalf("full = %s", full)
+	}
+	compact := renderTasksCompact([]domain.Task{task})
+	if !strings.Contains(compact, "AI 交接摘要") || strings.Contains(compact, "规则下一步") {
+		t.Fatalf("compact = %s", compact)
+	}
+
+	task.SummaryState = "pending"
+	full = renderTasks([]domain.Task{task}, cardDetailFull)
+	if !strings.Contains(full, "下一步: 规则下一步") {
+		t.Fatalf("pending summary should fall back to rule fields: %s", full)
+	}
+
+	exported := RenderTaskExport(task, nil, domain.Project{DisplayName: "demo", Key: "f:/demo"})
+	if !strings.Contains(exported, "下一步") || strings.Contains(exported, "AI 交接摘要") {
+		t.Fatalf("pending export should not use unready summary: %s", exported)
+	}
+	task.SummaryState = "ready"
+	exported = RenderTaskExport(task, nil, domain.Project{DisplayName: "demo", Key: "f:/demo"})
+	if !strings.Contains(exported, "摘要: AI 交接摘要") {
+		t.Fatalf("export should include ready summary: %s", exported)
+	}
+}

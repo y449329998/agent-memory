@@ -317,6 +317,55 @@ func TestLoad_HandoffOverridesWithZeroGuards(t *testing.T) {
 	}
 }
 
+func TestDefaultSettingsGroups(t *testing.T) {
+	c := Default(`C:\Users\demo`)
+	if c.Server.Port != 47123 {
+		t.Fatalf("port = %d", c.Server.Port)
+	}
+	if !c.Desktop.CloseToTray {
+		t.Fatal("close_to_tray should default true")
+	}
+	if c.LLM.Enabled || c.LLM.Timeout != 30*time.Second || c.LLM.MaxInputChars != 12000 {
+		t.Fatalf("llm defaults = %+v", c.LLM)
+	}
+}
+
+func TestSaveLoadSettingsGroups(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	c := Default(t.TempDir())
+	c.Server.Port = 47124
+	c.Desktop.CloseToTray = false
+	c.LLM = LLMConfig{Enabled: true, BaseURL: "http://127.0.0.1:11434/v1", Model: "qwen", Timeout: 20 * time.Second, MaxInputChars: 8000}
+	if err := Save(path, c); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Server.Port != 47124 || got.Desktop.CloseToTray || got.LLM.Model != "qwen" ||
+		got.LLM.Timeout != 20*time.Second || got.LLM.MaxInputChars != 8000 {
+		t.Fatalf("loaded = %+v", got)
+	}
+}
+
+func TestLLMKeyRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "llm.key")
+	if err := SaveLLMKey(path, "sk-test-123"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadLLMKey(path)
+	if err != nil || got != "sk-test-123" {
+		t.Fatalf("got=%q err=%v", got, err)
+	}
+	if err := SaveLLMKey(path, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("empty key should remove file, stat err=%v", err)
+	}
+}
+
 func TestDBPathAndConfigPath(t *testing.T) {
 	c := Default("/fake/home")
 	c.DataDir = filepath.Join(t.TempDir(), "am")

@@ -234,6 +234,40 @@ func TestWindowRequestChannelBuffersOne(t *testing.T) {
 	}
 }
 
+func TestConfiguredServePort(t *testing.T) {
+	cfg := config.Default(t.TempDir())
+	if got := configuredServePort(cfg); got != 47123 {
+		t.Fatalf("default port = %d", got)
+	}
+	cfg.Server.Port = 47200
+	if got := configuredServePort(cfg); got != 47200 {
+		t.Fatalf("configured port = %d", got)
+	}
+	cfg.Server.Port = 0
+	if got := configuredServePort(cfg); got != 47123 {
+		t.Fatalf("fallback port = %d", got)
+	}
+}
+
+func TestCloseToTrayReadsLatestConfig(t *testing.T) {
+	home := t.TempDir()
+	cfg := config.Default(home)
+	if !closeToTray(home, cfg) {
+		t.Fatal("default should keep tray on close")
+	}
+	cfg.Desktop.CloseToTray = false
+	if err := config.Save(config.ConfigPath(home), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if closeToTray(home, config.Default(home)) {
+		t.Fatal("closeToTray must re-read config, not use fallback")
+	}
+	// 用户目录为空时退回启动时配置。
+	if !closeToTray("", config.Default(home)) {
+		t.Fatal("empty home should use fallback")
+	}
+}
+
 func TestDesktopFileRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	if _, ok := readDesktopFile(dir); ok {
