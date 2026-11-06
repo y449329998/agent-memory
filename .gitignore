@@ -2,6 +2,8 @@
 /agent-memory.exe~
 /agent-memory-app.exe
 /agent-memory-app.exe~
+/out/
 /agent-memory
 *.test
 /.am-local/
+/vibe_images/
