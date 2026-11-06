@@ -311,7 +311,7 @@ CREATE TABLE IF NOT EXISTS summary (
 - 项目按 `project_key`。
 - 记忆按 `scope + project_key + type + text_norm_hash`，命中则更新摘要/来源。
 - 任务优先按来源会话（source_agent + 会话 external_id）合并；没有来源时按项目内相同目标合并；否则创建手动任务。
-- 导入前自动备份；任一步失败整批回滚。
+- 导入前自动备份；格式/字段校验失败在任何写入前拒绝。若写库过程中遇到 SQLite/磁盘错误，接口返回错误并保留备份，可用备份恢复。
 - 上传文件上限 50MB；格式版本不符直接拒绝。
 
 ### 8.5 打开目录

@@ -6,9 +6,17 @@ M1 接入 Qoder 的记忆文件；M2 起再导入它的会话历史，提炼任�
 
 ## 桌面应用
 
-不想用命令行：构建 `go build -ldflags "-H windowsgui" -o agent-memory-app.exe ./cmd/agent-memory-app`，双击运行即可。它会自动准备配置与数据库、在 47123 端口拉起后台服务，并打开一个「agent-memory 共享记忆」窗口（WebView2；缺失时回退 Edge/Chrome 应用窗口）。关掉窗口只是隐藏到系统托盘，后台服务继续运行；再次双击会唤起已有窗口而不是起第二个实例。托盘菜单可立即同步、打开日志、开机自启、停止服务并退出。
+不想用命令行：构建 `go build -ldflags "-H windowsgui" -o agent-memory-app.exe ./cmd/agent-memory-app`，双击运行即可。它会自动准备配置与数据库、按配置端口（默认 47123）拉起后台服务，并打开一个「agent-memory 共享记忆」窗口（WebView2；缺失时回退 Edge/Chrome 应用窗口）。关掉窗口只是隐藏到系统托盘，后台服务继续运行；再次双击会唤起已有窗口而不是起第二个实例。托盘菜单可立即同步、打开日志、开机自启、停止服务并退出。
 
-详见 [docs/usage.md](docs/usage.md)（命令、配置、Web UI、MCP 接入、排错）。设计文档见 `docs/superpowers/specs/`，实施计划见 `docs/superpowers/plans/`。
+Windows 安装包（NSIS，免管理员权限，装到 `%LOCALAPPDATA%\Programs\agent-memory`，卸载保留数据）：
+
+```
+powershell -ExecutionPolicy Bypass -File scripts\package.ps1   # 产出 out\agent-memory-setup-x64.exe
+```
+
+**面向使用者的图解说明**（每个页面逐区标注、设置项含义、数据位置、排错与工作流）见
+[docs/client-guide.md](docs/client-guide.md)。命令、配置、Web UI、HTTP API 与 MCP 接入的完整参考见
+[docs/usage.md](docs/usage.md)。设计文档见 `docs/superpowers/specs/`，实施计划见 `docs/superpowers/plans/`。
 
 ## 现在能做什么
 
@@ -16,16 +24,17 @@ M1 接入 Qoder 的记忆文件；M2 起再导入它的会话历史，提炼任�
 - 同时导入 Trae 与 WorkBuddy 的记忆：Trae 读用户记忆、`projects/*/project_memory.md` 与 `user_rules/`（项目记忆按 `workspaceStorage` 映射回真实项目），WorkBuddy 读 `MEMORY.md`；三家去重进同一份库，`doctor` 分别给出发现结果
 - `agent-memory serve` 常驻：HTTP 接口 + MCP 端点，同时监听 agent 目录，变化时自动增量扫描并刷新简报
 - `agent-memory mcp` 作为 stdio 桥转发给 serve，agent 侧只看到一种标准的本地 MCP 进程
-- MCP 暴露 8 个工具：`memory_search` / `memory_add` / `memory_list` / `handoff_get` / `task_list` / `task_get` / `project_resolve` / `stats`
+- 任务分两类：`kind=session` 对话任务（一次 agent 对话一条，步骤来自该 agent 的 Todo 或从会话整理）与 `kind=formal` 合并任务（跨对话收尾，桌面端或 MCP 显式建/合并）；扫描不再把新会话折叠进同项目的进行中任务
+- MCP 暴露 11 个工具：`memory_search` / `memory_add` / `memory_list` / `handoff_get` / `task_list` / `task_get` / `task_add` / `task_update` / `task_export` / `project_resolve` / `stats`
 - `agent-memory link qoder|opencode|claude` 一键接入（**改配置前先 `--dry-run`**，写前自动备份）
 - 检索用 FTS5 + 自切分中文二元组，两字中文词（如「偏好」「命名」）也能召回
 - 命令行查、写、列、清理；`doctor` 汇总库状态、会话 / 任务卡 / 简报计数、agent 发现结果与写入目标
 
 ## MCP 接入
 
-先让 `serve` 常驻。`--port` 默认 `0`，表示由系统分配随机端口，实际端口写进数据目录下的 `port` 文件；日常接入建议固定端口，serve 重启后端口才不变：
+先让 `serve` 常驻。不写 `--port` 时使用配置 `[server] port`（默认 47123）；显式 `--port 0` 才由系统分配随机端口。实际端口写进数据目录下的 `port` 文件：
 
-    ./agent-memory serve --port 47123     # 常驻，保持运行
+    ./agent-memory serve                  # 常驻，使用配置端口（默认 47123）
 
 再对 agent 先看计划、确认无误后写入。**`link` 会改 agent 的 MCP 配置文件，必须先跑 `--dry-run` 看它要写哪里**：
 
@@ -51,7 +60,7 @@ Trae 与 WorkBuddy 的 MCP 配置格式未确证，`link` 拒绝写入；它们�
 
 ## Web UI
 
-`serve` 自带本地 Web UI（多页面：总览、项目档案、记忆档案、来源与编辑页），不需要额外安装：
+`serve` 自带本地 Web UI（多页面：总览、项目档案、记忆档案、来源、任务列表与任务详情、MCP 接驳台、设置中心），不需要额外安装：
 
 ```
 http://127.0.0.1:<端口>/?token=<~/.agent-memory/token 里的值>
@@ -59,11 +68,13 @@ http://127.0.0.1:<端口>/?token=<~/.agent-memory/token 里的值>
 
 打开后 token 会存进 `sessionStorage` 并从地址栏抹掉。页面提供：
 
-- 概览（项目/记忆/过时/源/失败源）与健康状态
-- 搜索记忆（中文两字词可命中，可按类型与项目过滤，可勾选包含过时）
-- 记忆管理：新增（用户级/项目级）、标过时、复活
-- 任务卡列表（目标 / 状态 / 下一步 / 改动文件）
+- 概览（项目/记忆/过时/来源/失败源，数字可点下钻）与健康状态、深浅色主题
+- 搜索记忆（中文两字词可命中，可按类型、范围、项目过滤，可勾选包含过时）
+- 记忆管理：新增（用户级/项目级）、Markdown 编辑与实时预览、标过时、复活
+- 正式任务：目标 / 状态 / owner / 下一步 / 步骤 / 片段证据，可按关键词、项目、状态、owner、来源、更新时间筛选，支持归档、合并、复制交接 Prompt
 - 交接简报：预览与「写入 HANDOFF.md」
+- MCP 接驳台：按客户端生成实时端口/令牌/启动路径的配置片段，一键复制
+- 设置中心：服务端口（改动自动重写已登记客户端配置）、MCP 启动程序路径、开机自启、关窗驻留、扫描间隔与简报预算、来源开关、可选 LLM 异步摘要、数据备份/导出/导入
 - 一键触发 `scan`
 
 页面没有任何外部依赖（无 CDN、无字体库），所有动态内容用 `textContent` 插入；写接口除 Bearer 外还校验 `Origin` 必须是本机同端口。
@@ -103,7 +114,7 @@ http://127.0.0.1:<端口>/?token=<~/.agent-memory/token 里的值>
     agent-memory doctor                       # 库状态、会话/任务卡/简报计数、写入目标清单、agent 发现结果、未合并项目
     agent-memory doctor --since 24h           # 列出 24h 内变更过的源文件（默认 720h）
 
-    agent-memory serve --port 47123           # 常驻服务；省略 --port 即随机端口，实际端口写进 ~/.agent-memory/port
+    agent-memory serve                        # 常驻服务；默认使用 [server] port（47123），实际端口写进 ~/.agent-memory/port
     agent-memory serve --no-watch             # 只服务不扫描（调试）
     agent-memory mcp                          # stdio 桥，agent 的 MCP 配置用它；一般由 link 生成，不必手写
     agent-memory link qoder --project "$(pwd)" --dry-run   # 先看计划：会改哪个配置、装哪段区块

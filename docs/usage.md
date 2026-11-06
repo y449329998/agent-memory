@@ -136,7 +136,7 @@ agent-memory serve [--port 47123] [--poll 30] [--debounce 2s] [--no-watch]
 常驻服务：扫描 + 文件监听 + HTTP/MCP。
 
 - 只监听 `127.0.0.1`，用 `~/.agent-memory/token` 做 Bearer 鉴权；端口写入 `~/.agent-memory/port`，退出时删除。
-- `--port 0` 系统分配随机端口；**换端口后要重新 `link`**（MCP 配置里写死了端口）。
+- 不写 `--port` 时使用配置 `[server] port`（默认 47123）；显式 `--port 0` 才让系统分配随机端口。桌面端「设置」改端口会自动重写已登记的 MCP 配置；手工改配置文件后仍要重新 `link`。
 - `--poll` 轮询兜底间隔（0 表示用配置 `[scan] interval`）；`--debounce` 事件去抖窗口。
 - 监听目录只覆盖记忆源：qoder 的 `memory/`、`projects/`，trae 的 `memory/`、`user_rules/`（去重后交给 watcher）；WorkBuddy 不监听，会话与任务清单的变化只靠 `--poll` 兜底。
 - `--no-watch` 只开服务不扫描（调试用），此时 `POST /v1/scan` 仍可用。
@@ -188,6 +188,22 @@ agent-memory help | -h | --help
 ```toml
 data_dir = 'C:\Users\You\.agent-memory'
 
+[server]
+port = 47123              # 桌面版与 MCP 配置使用的端口
+
+[desktop]
+close_to_tray = true      # 关窗后隐藏到托盘；false 表示关窗即停止服务并退出
+
+[mcp]
+binary_path = ''          # 留空自动找 exe 同目录的 agent-memory.exe
+
+[llm]
+enabled = false
+base_url = ''             # 例：https://api.openai.com/v1 或 http://127.0.0.1:11434/v1
+model = ''
+timeout = "30s"
+max_input_chars = 12000
+
 [qoder]
 disabled = false
 home = 'C:\Users\You\.qoder-cn'
@@ -221,6 +237,10 @@ settle_idle = "5m"        # 会话文件静默多久算写完、可以出任务�
 - `trae.workspace_roots` 不填则取 `%APPDATA%\Trae CN\User\workspaceStorage` → `%APPDATA%\Trae\User\workspaceStorage`；`APPDATA` 为空时退回 `<用户目录>\AppData\Roaming` 下的同名路径。
 - `workbuddy.home` 不填则自动发现 `~/.workbuddy`（判据是存在 `MEMORY.md` 或 `app` 子目录）。
 - 三家的 `disabled = true` 都会让对应适配器既不扫描、也不出现在 `doctor` 的发现结果里。
+- `llm.enabled` 打开且 `base_url`/`model`/API Key 齐全，才会启动摘要 worker；缺任何一项都不会创建摘要任务、也不会发起网络请求。
+- API Key 单独存 `llm.key`（Windows 用 DPAPI 加密，接口只返回是否已配置，不回显明文），不写进 `config.toml`。
+- 启用摘要会把记忆正文、任务目标/步骤/片段发送到 `base_url` 指向的模型服务；不配置 LLM 时不会发出任何模型请求，原文始终保存在本机。
+- 这些分组都可以在桌面端「设置」页修改，保存后自动生效（端口会热切换并重写已登记的 MCP 配置）。
 
 ---
 
@@ -233,6 +253,9 @@ settle_idle = "5m"        # 会话文件静默多久算写完、可以出任务�
 | `~/.agent-memory/token` | 访问令牌（0600） | 首次 `serve` / `link` / `mcp` |
 | `~/.agent-memory/port` | 运行中 daemon 的端口 | `serve` |
 | `~/.agent-memory/app.log` | 桌面应用与它拉起的 serve 的日志 | 桌面应用 |
+| `~/.agent-memory/llm.key` | LLM API Key（Windows DPAPI 加密，0600） | 设置页 |
+| `~/.agent-memory/backups/` | `memory-*.db` 一致性备份，保留最近 10 份 | 设置页/导入前自动备份 |
+| `~/.agent-memory/imports/` | 导入预览的临时 JSON，10 分钟过期 | 数据导入 |
 | `<项目>/.agent-memory/HANDOFF.md` | 交接简报 | `scan` / `handoff` / Web UI |
 | `<项目>/.git/info/exclude` | 加一行 `/.agent-memory/` | 首次写简报时 |
 | `~/.qoder-cn/mcp.json` 等 | MCP 配置 | **仅** `link`/`unlink` |
@@ -283,19 +306,24 @@ SQLite FTS5 默认分词搜不到中文（实测：「用户偏好」里搜「�
 - 状态：末尾连续 ≥2 条错误 → `blocked`；末条 assistant 文本在最后一次命令之后出现「测试通过/验证通过/PASS」等且无否定与失败词 → `done`；否则 `doing`
 - 会话文件静默超过 `settle_idle`（默认 5 分钟）才出卡；先被扫到但还没写完的会话，等静默后的下一次扫描会补出卡，不会覆盖已有卡
 
-**正式任务**是跨会话持续更新的对象：
+**任务分两类**（`task.kind`），一次 agent 对话就是一条**对话任务**：
 
-- 扫描把摘要卡同步成正式任务；WorkBuddy 的 `tasks/<会话>/*.json` 导入为步骤。
-- 任务可以关联多场会话；换 agent 后新会话按同项目同 owner 自动挂到已有任务。
-- 桌面端与 MCP 都能新建、认领、更新状态/步骤/下一步、归档/恢复、合并重复任务。
-- 完成满 30 天自动归档；归档任务从活动列表和简报隐藏，可在任务页恢复。
-- 来源会话路径保留在任务里，摘要不够时回源查看。
+- `kind=session` 对话任务：扫描按会话幂等生成，一条会话一条，`task.session_id` 是唯一权威绑定（部分唯一索引保证不会重复）。目标取会话标题或摘要卡的目标；步骤优先用 agent 自己的 Todo（WorkBuddy `tasks/<会话>/*.json`），没有就从摘要卡反推（命令/改动 → 已完成，下一步/未决问题 → 待办，报错 → 受阻，上限 12 条）。
+- `kind=formal` 合并任务：桌面端或 MCP 显式新建，或用「合并到…」把几条对话任务并成一条。跨对话收尾看这个。
+- 扫描不再把新会话折叠进「同项目同 owner 的进行中任务」（旧 `FindAttachableTask` 行为已删除）；想关联到合并任务请显式合并。
+- 手工编辑过的任务（`manual_edited_at <> 0`）只更新片段，不会被扫描重写目标与步骤。
+- 任务可以关联多场会话（`task_session`）；完成满 30 天自动归档，归档任务从活动列表和简报隐藏，可在任务页恢复。
+- 任务页排序默认「最近有内容」= `MAX(task.updated_at, 步骤最新 updated_at, 片段最新 ts)`，可选 `created` / `idle`；筛选条件一改就重新查询并写进 URL（`kind`、`q`、`project_key`、`status`、`owner_agent`、`source_agent`、`updated_after`、`sort`、`include_archived`），前进后退都保持。
+- 配置 LLM 后，记忆与任务会在写入/同步后异步生成中文摘要；原文始终保留。列表优先显示摘要并标「AI 摘要」，任务详情同时能看到摘要与原始目标/下一步，失败时自动退回规则字段。
+
+**从 schema_version 1 升级**：`Open` 会自动跑一次迁移（给 `task` 加 `kind`/`session_id` 并建索引），
+把「只关联一场会话且从未手工编辑」的老任务转成对话任务，其余保持合并任务；不删任何数据，重复打开安全。
 
 **简报**固定顺序，内容来自库里的记忆与正式任务：
 1. 项目概况（project_key、路径、记忆与任务数）
 2. 用户偏好（全局，永不裁剪）
 3. 项目硬约束与约定（永不裁剪）
-4. 进行中的任务（目标 / 状态 / owner / 步骤进度 / 当前步骤 / 下一步 / 文件 / 命令 / 报错）
+4. 进行中的任务（优先合并任务；一条合并任务都没有才退到最近的对话任务。目标 / 状态 / owner / 步骤进度 / 当前步骤 / AI 摘要或下一步 / 文件 / 命令 / 报错）
 5. 未决问题
 6. 共享记忆入口（CLI 与 MCP 用法提示）
 
@@ -325,13 +353,15 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 | 记忆档案 | `/memories` | 全部记忆，按关键词/范围/项目/类型/过时筛选，可展开更多 |
 | 来源 | `/sources` | 所有记忆文件与会话文件，可只看失败 |
 | 编辑记忆 | `/m/<记忆id>` | 独立编辑页，保存/取消后回到来源页 |
+| MCP 接入 | `/mcp` | 当前端口/令牌、Qoder/OpenCode/Claude/通用 stdio 配置与一键复制 |
+| 设置 | `/settings` | 服务与托盘、LLM 摘要、扫描与简报、数据备份/导出/导入，左侧分区切换 |
 
 - token 会存进 `sessionStorage` 并从地址栏抹掉；同一标签页里点页面链接不需要重复带令牌。直接打开某个地址（没有令牌）会显示「需要访问令牌」。
 - 首页五个数字都可下钻：项目跳到项目索引；记忆/过时进「记忆档案」；源/失败源进「来源」。
 - 项目档案是「左栏目录 + 右栏正文」：左栏是项目名、路径、记忆/任务/来源统计和七个区块的锚点；右栏按 01–07 编号展示，项目记忆与用户级记忆分开。
 - 记忆条目是账本行：左侧细线按类型着色，点整行进独立编辑页；条目正文按 Markdown 渲染并折叠预览，长内容点进编辑页看全文；项目页只展示前 10 条，点「查看全部」进 `/memories?project=...`。
 - 记忆编辑：独立页面，左侧改正文/类型、右侧实时 Markdown 预览；可保存、取消、标过时/恢复；编辑成与已有条目相同的内容会自动合并并提示。来自 Qoder/Trae 文件的记忆提示「源文件变化后编辑可能被覆盖」。保存后回到进入编辑页时的列表/项目页。
-- 任务页 `/tasks`：正式任务列表，可切换归档；项目页的任务区只显示当前项目的活动任务。
+- 任务页 `/tasks`：关键词 + 项目 + 状态 + owner + 来源 + 时间范围筛选，可切换归档；条件写进 URL，刷新/前进后退保持。项目页的任务区只显示当前项目的活动任务。
 - 任务详情 `/t/<id>`：编辑目标、状态、owner、下一步和步骤；查看最近对话片段与来源会话；可归档/恢复、合并重复任务、复制交接 Prompt。
 - 任务与交接简报：正文按 Markdown 渲染（标题、列表、表格、代码块）；任务「下一步」过长会折叠，可点「展开全文」。
 - 来源页列出 agent、文件路径、最后扫描时间、大小与失败原因；项目页只列给该项目贡献过记忆的来源。
@@ -339,26 +369,35 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 - 页面使用真实的页面跳转（浏览器前进/后退可用），不再用弹层/抽屉；支持跨文档 View Transition（Chromium 126+，其它浏览器自动退化为普通跳转）。
 - 视觉：深色极光 + 玻璃面板 + 渐变大字；默认深色，右上角可切浅色（会记住选择）；窄屏单列；系统开启「减少动态效果」时关闭动效。
 - 安全：页面壳本身不含数据与令牌，可以公开；所有数据接口仍需 Bearer，写接口额外校验 `Origin`；普通动态文本走 `textContent`，Markdown 预览先转义再交给 `DOMParser`，不执行原始 HTML 或脚本。
+- MCP 页 `/mcp`：显示当前实际端口、启动程序路径与掩码令牌；四个标签页给出 Qoder、OpenCode、Claude Code 与通用 stdio 的完整配置，「一键复制当前配置」复制的内容含真实 token。改端口后要回该页重新复制。
+- 设置页 `/settings` 分四区，各自独立保存：
+  - 服务与托盘：端口、托盘关闭行为、开机自启、MCP 启动程序路径。改端口会先重写已登记 agent 的 MCP 配置，再在进程内切换监听；新端口绑定失败会回滚配置与 MCP 文件。页面会自动跳到新端口。
+  - LLM 摘要：启用开关、OpenAI 兼容 `base_url`/模型、超时、最大输入、API Key（DPAPI 保存，不回显）；可测试连接、重试失败摘要，并显示 pending/ready/failed 计数。
+  - 扫描与简报：扫描间隔、三家来源开关、简报预算/卡片数/静默阈值；保存后热重载扫描器。
+  - 数据：数据目录、库大小、最近备份；一键备份、打开数据目录、导出 JSON、导入预览与合并。导入前自动备份。
 - 截图见 `docs/superpowers/specs/assets/project-console/`。
 
 ---
 
 ## 10.5 桌面应用（不想用命令行就看这节）
 
+> 想要**逐屏图解**的版本（每个页面截图 + 编号标注、每个设置项改了会发生什么、典型工作流与排错对照表），
+> 看 [docs/client-guide.md](client-guide.md)。本节是要点摘录。
+
 双击 `agent-memory-app.exe`，会打开一个标题为「agent-memory 共享记忆」的窗口，内容与 Web UI 相同。不需要浏览器、不需要记 token、不需要输命令。
 
 启动时它自己完成这些事：
 
 1. 没有 `~/.agent-memory/config.toml` 或库就自动创建；
-2. 检查后台服务是否已在运行——在运行就复用，没有就用固定端口 `47123` 拉起一个；
+2. 检查后台服务是否已在运行——在运行就复用，没有就用配置 `[server] port`（默认 47123）拉起一个；
 3. 等健康检查通过后打开窗口，token 自动注入。
 
 生命周期：
 
-- **关掉窗口不会退出应用**：窗口隐藏到系统托盘，后台服务继续跑，Qoder 等 agent 的 MCP 调用照常工作。
+- **关掉窗口是否退出由设置决定**：设置 → 服务与托盘里 `close_to_tray` 默认开启，关窗后隐藏到系统托盘，后台服务继续跑，Qoder 等 agent 的 MCP 调用照常工作；关闭后关窗即停止 serve 并退出桌面进程。每次关窗都会重新读取配置，改完不需要重启应用。
 - **再次双击 exe 不会起第二个实例**：窗口开着就提到前台，窗口已关闭就重新打开。后启动的进程发个通知就自己退出，不会再弹「已在运行」。
 - 窗口位置和大小会自动记住（`~/.agent-memory/window.json`），下次打开还原到上次的位置。
-- 如果 47123 被别的程序占用，会弹窗说明（不会静默换端口，否则 MCP 配置会对不上）。
+- 如果配置端口（默认 47123）被别的程序占用，会弹窗说明（不会静默换端口，否则 MCP 配置会对不上）。
 
 托盘操作：
 
@@ -371,9 +410,9 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 | 立即同步 | 立即扫描一次所有 agent 的源（等价于页面上的「立即同步」） |
 | 打开日志 | 用记事本打开 `~/.agent-memory/app.log` |
 | 开机自动运行 | 勾选后写入 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，登录后以托盘模式启动（不弹窗） |
-| 停止服务并退出 | 真正退出：关闭窗口、停掉后台服务、释放 47123、移除托盘图标 |
+| 停止服务并退出 | 真正退出：关闭窗口、停掉后台服务、释放当前端口、移除托盘图标 |
 
-页面右上角的「设置」里也有「开机自动运行」开关，与托盘菜单是同一份状态。
+页面右上角的「设置」里也有「开机自动运行」开关，与托盘菜单是同一份状态；托盘动作与重新开窗会从 `port` 文件读取当前端口，设置页换端口后无需重启桌面应用。
 
 快捷方式：`agent-memory-app.exe --install-shortcuts` 会在桌面和开始菜单各创建一个 `agent-memory.lnk`；`--uninstall-shortcuts` 删除它们。快捷方式图标取自 exe 内嵌图标。
 
@@ -413,6 +452,7 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 ```
 
 - OpenCode 用 `type: "local"` + `command` 数组 + `environment`；Claude Code 写 `~/.claude.json` 的 `mcpServers`。
+- 不想敲命令：打开桌面端左侧「MCP 接入」，选对应客户端标签，点「一键复制当前配置」，粘贴进客户端配置文件即可。页面生成的是当前实际端口与真实 token；Cursor、Codex、DeepSeek 等没有内置模板的客户端用「通用 stdio」示例改键名。
 - 改完要**重启 agent** 才会加载 MCP 配置。
 - 撤销：`agent-memory unlink qoder --project .`（区块与配置键都会移除，其余键不动）。
 
@@ -424,8 +464,8 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 | `memory_add` | 写入（`text`/`type` 必填；可 `scope`/`project_path`/`supersedes`） |
 | `memory_list` | 浏览条目 |
 | `handoff_get` | 取项目交接简报 |
-| `task_list` / `task_get` | 正式任务列表 / 详情（含步骤、片段、来源会话） |
-| `task_add` | 新建正式任务，可带步骤 |
+| `task_list` / `task_get` | 任务列表 / 详情（含步骤、片段、来源会话）；`task_list` 可带 `kind=session|formal` |
+| `task_add` | 新建合并任务（`kind=formal`），可带步骤 |
 | `task_update` | 更新目标/状态/下一步/owner/归档，步骤整组替换 |
 | `task_export` | 导出交接 Prompt（带同一个 task_id） |
 | `project_resolve` | 路径 → project_key |
@@ -441,7 +481,7 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/`、`/p/<key>`、`/m/<id>`、`/tasks`、`/t/<id>`、`/memories`、`/sources` | Web UI 页面壳（公开，不含数据与令牌） |
+| GET | `/`、`/p/<key>`、`/m/<id>`、`/tasks`、`/t/<id>`、`/memories`、`/sources`、`/mcp`、`/settings` | Web UI 页面壳（公开，不含数据与令牌） |
 | GET | `/v1/healthz` | 健康检查（免鉴权） |
 | GET | `/v1/stats` | 统计 |
 | GET | `/v1/projects` | 项目列表 |
@@ -452,14 +492,26 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 | GET | `/v1/handoff` | `?project_path=|project_key=&format=json\|markdown` |
 | POST | `/v1/handoff` | `{project_path, write}` |
 | GET | `/v1/task` | 会话摘要卡：`?project_path=&status=&limit=` |
-| GET | `/v1/tasks` | 正式任务：`?project_key=&status=&include_archived=&limit=` |
+| GET | `/v1/tasks` | 任务：`?kind=session\|formal=&project_key=&status=&q=&owner_agent=&source_agent=&updated_after=&updated_before=&include_archived=&sort=created\|idle=&limit=&offset=`（不传 `kind` 返回两类；不传 `sort` 按「最近有内容」） |
 | GET | `/v1/tasks/item` | `?id=`，任务、步骤、片段、来源会话 |
-| POST | `/v1/tasks` | `{project_path, goal, status?, next_steps?, owner_agent?, steps?}` |
+| POST | `/v1/tasks` | `{project_path, goal, status?, next_steps?, owner_agent?, steps?}`，建出的任务 `kind=formal` |
 | POST | `/v1/tasks/update` | `{id, goal?, status?, next_steps?, owner_agent?, archived?, steps?}` |
 | POST | `/v1/tasks/merge` | `{source_id, target_id}` |
 | GET | `/v1/tasks/export` | `?id=`，交接 Prompt Markdown |
 | POST | `/v1/project/resolve` | `{path}` |
 | POST | `/v1/scan` | 触发一次扫描 |
+| GET | `/v1/mcp/snippets` | 当前端口/token 掩码与四种 MCP 配置 |
+| GET | `/v1/settings` | 服务、托盘、扫描、LLM、数据概览（不含密钥） |
+| POST | `/v1/settings/service` | `{port, autostart?, close_to_tray?, mcp_binary_path?}` |
+| POST | `/v1/settings/scan` | `{interval_seconds, budget_tokens, recent_cards, settle_idle_seconds, *_disabled?}` |
+| POST | `/v1/settings/llm` | `{enabled, base_url, model, timeout_seconds?, max_input_chars?, api_key?, clear_api_key?}` |
+| POST | `/v1/settings/llm/test` | 调用一次模型测试连接 |
+| POST | `/v1/settings/llm/retry` | 把 failed 摘要重新排队 |
+| POST | `/v1/data/backup` | `VACUUM INTO` 备份，保留最近 10 份 |
+| GET | `/v1/data/export` | 下载项目/记忆/合并任务（含步骤与就绪摘要）JSON；对话任务不导出，目标机扫描会重建 |
+| POST | `/v1/data/import` | multipart `file`，返回 `import_token` 与预览 |
+| POST | `/v1/data/import/apply` | `{import_token}`，导入前自动备份 |
+| POST | `/v1/data/open` | 打开数据目录 |
 | POST | `/mcp` | MCP JSON-RPC（stdio 桥的目标） |
 
 请求体上限 1MB；`/v1/search` 省略项目时只查用户级记忆。
@@ -486,7 +538,10 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 | `agent-memory serve 未运行` | 先起 `serve`；`link` 需要它读端口。`~/.agent-memory/port` 只在运行期存在 |
 | Web UI 提示缺少令牌/401 | token 不对或该标签页没带过令牌：`cat ~/.agent-memory/token`，用 `/?token=` 重开一次 |
 | MCP 调用全部失败 / 401 | 配置里的 token 与 `~/.agent-memory/token` 不一致（重置过 token 或换机器），重跑 `link`；改完重启 agent |
-| MCP 工具列表为空 | agent 没重启，或桥的端口不是当前 serve 端口；核对 `mcp.json` 的 `--port` |
+| MCP 工具列表为空 | agent 没重启，或桥的端口不是当前 serve 端口；核对 `mcp.json` 的 `--port`（设置页改端口后应自动重写；失败会有提示） |
+| 设置页改端口后页面打不开 | 新端口被占用时会回滚到旧端口并提示；确认没有别的程序占用，或换一个 1024–65535 的端口 |
+| LLM 摘要一直 pending | 检查启用开关、`base_url`/`model` 与 API Key 是否齐全（缺一项不会启动 worker）；在设置页点「测试连接」定位网络或鉴权问题 |
+| 摘要 failed | 失败最多自动重试 3 次；修好模型配置后点「重试失败摘要」重新排队。原文与规则字段始终可用 |
 | `serve` 启动报「已在运行」 | 已有实例占用该端口；先停止它，或换端口后重新 `link` |
 | 扫描后记忆没变 | 很正常：内容哈希未变即幂等跳过。需要强制重解析用 `scan --full` |
 | 某条记忆不出现 | 可能已 stale（`memory search --include-stale` 查看）；或落在低置信项目里（`doctor` 的未合并项目） |
@@ -497,9 +552,9 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 | 想看某个源为什么失败 | `doctor` 的「解析失败的源」；修好后 `scan --full` |
 | 提示「拒绝写入 agent 原生目录」 | 该项目的 `primary_path` 落在 agent 配置目录里，属于保护行为，跳过即可 |
 | 双击桌面应用窗口没出现 | 看 `~/.agent-memory/app.log` 末尾；常见原因是 47123 被占用（会弹窗），或 WebView2 运行时缺失（会自动改用 Edge/Chrome 应用窗口） |
-| 关掉桌面窗口后 agent 用不了记忆 | 关窗口只是隐藏到托盘，服务应继续在后台跑（`netstat -ano | findstr 47123` 应能看到 LISTENING）；若托盘里也没有图标，看 `app.log` 是否崩溃，再重新双击应用 |
+| 关掉桌面窗口后 agent 用不了记忆 | 默认关窗口只是隐藏到托盘，服务应继续在后台跑（`netstat -ano | findstr 47123` 应能看到 LISTENING）；若在设置里关了 `close_to_tray`，关窗会停服务并退出，这是预期行为 |
 | 托盘图标不见了 | 在任务栏通知区展开「隐藏的图标」里找；Windows 有时会把新图标默认收起来 |
-| 桌面应用与命令行 serve 谁在跑 | 两者是同一个服务，端口都是 47123；谁先起就复用谁，不会重复启动 |
+| 桌面应用与命令行 serve 谁在跑 | 两者是同一个服务，优先复用 `port` 文件里的现有实例；桌面端启动时使用配置 `[server] port` |
 | 开机自启没生效 | 托盘菜单勾选后，`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 里应有 `agent-memory` 值（`reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v agent-memory`）；安全软件可能拦截注册表写入 |
 | 想彻底卸载 | 托盘 → 停止服务并退出；`--uninstall-shortcuts`；取消开机自启；删除 exe 与 `~/.agent-memory`（库和配置都在里面，删前先备份） |
 | 升级 exe 时提示「文件被占用」 | 桌面应用拉起的服务就是 `agent-memory-app.exe --serve`，它锁着自身二进制。托盘菜单选「停止服务并退出」（或任务管理器结束所有 `agent-memory-app.exe`），再替换 exe |
@@ -519,13 +574,15 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 - OpenCode 的会话/记忆与 Trae 的云端会话尚未接入
 - `git worktree` / submodule 的 `.git` 是文件，目前读不到 remote，会退化为路径 key
 - 单机单库；多机同步与全文 transcript 检索属于非目标
+- LLM 摘要依赖外部 OpenAI 兼容服务；未配置时所有功能照常可用，只是没有「AI 摘要」标记。摘要不替代原文，硬约束/偏好在简报里仍使用原文
+- 导入会按项目 key、记忆归一化文本、任务目标合并；导入前自动备份，但写库过程中若遇到磁盘/SQLite 故障，需用备份手动恢复（接口会返回错误）
 
 ---
 
 ## 16. 开发与测试
 
 ```bash
-go test ./... -count=1     # 356 个测试函数
+go test ./... -count=1     # 443 个测试函数
 go vet ./...
 go build ./cmd/agent-memory
 ```
@@ -537,3 +594,20 @@ git show :internal/store/memory.go | gofmt -d
 ```
 
 数据库 schema 版本记录在 `meta.schema_version`（当前 `1`）。版本高于二进制时会拒绝打开并提示重建，不会静默降级。
+
+### 出 Windows 安装包
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\package.ps1
+# 可选：-SkipTests 跳过测试，-SkipBuild 复用已编译的 out\*.exe
+```
+
+脚本依次做：`go test ./...` → 以 `CGO_ENABLED=0` 静态编译 `out\agent-memory.exe`（CLI）与
+`out\agent-memory-app.exe`（GUI，`-H windowsgui`）→ 从 `internal/cli/root.go` 读版本号 →
+把两个 exe、`README.md`、`docs\usage.md`、`docs\client-guide.md` 与图片摆进 `out\pkg\` →
+调 `makensis`（自动找 Program Files 或 electron-builder 缓存）编译 `installer\agent-memory.nsi` →
+输出 `out\agent-memory-setup-x64.exe` 及其大小与 SHA-256。
+
+要点：安装包是 per-user（`RequestExecutionLevel user`），装到 `%LOCALAPPDATA%\Programs\agent-memory`，
+不需要管理员权限；安装/卸载前都会 `taskkill` 两个进程名；卸载只删程序与快捷方式，**保留 `~\.agent-memory`**；
+`installer\agent-memory.nsi` 必须保留 UTF-8 BOM，否则 NSIS 3.0.4 编译中文会报 `Bad text encoding`。
