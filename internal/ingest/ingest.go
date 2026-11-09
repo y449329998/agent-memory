@@ -244,6 +244,12 @@ func (r *Runner) Run(ctx context.Context, onlyAgent string) (Result, error) {
 						if err := r.syncTaskFromSession(ctx, a.Name(), sess, sessID, card, u.Steps, time.Now()); err != nil {
 							res.Errors = append(res.Errors, fmt.Sprintf("%s: task: %v", u.Path, err))
 						}
+						// 老库补写：内容没变但完整对话还没入库
+						if has, err := r.store.HasMessages(ctx, sessID); err == nil && !has {
+							if err := r.writeMessages(ctx, a, u.Path, sessID); err != nil {
+								res.Errors = append(res.Errors, fmt.Sprintf("%s: transcript: %v", u.Path, err))
+							}
+						}
 					}
 				}
 				continue
@@ -271,6 +277,9 @@ func (r *Runner) Run(ctx context.Context, onlyAgent string) (Result, error) {
 			events := agent.EventsWithSession(sessID, u.Events)
 			if err := r.store.ReplaceEvents(ctx, sessID, events); err != nil {
 				return res, err
+			}
+			if err := r.writeMessages(ctx, a, u.Path, sessID); err != nil {
+				res.Errors = append(res.Errors, fmt.Sprintf("%s: transcript: %v", u.Path, err))
 			}
 
 			// 是否出卡只看源文件 mtime：还在写的会话只导入事件，等下一轮再提炼。

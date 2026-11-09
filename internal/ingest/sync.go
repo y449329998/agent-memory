@@ -19,6 +19,7 @@ type sessionParser interface {
 // 返回任务 id 与是否已静默；正在写的会话 settled=false。
 func (r *Runner) SyncSession(ctx context.Context, agentName, path string) (int64, bool, error) {
 	var parser sessionParser
+	var adapter agent.Adapter
 	for _, a := range r.adapters {
 		if a.Name() == agentName {
 			p, ok := a.(sessionParser)
@@ -26,6 +27,7 @@ func (r *Runner) SyncSession(ctx context.Context, agentName, path string) (int64
 				return 0, false, fmt.Errorf("agent %s 不支持定向同步", agentName)
 			}
 			parser = p
+			adapter = a
 		}
 	}
 	if parser == nil {
@@ -52,6 +54,9 @@ func (r *Runner) SyncSession(ctx context.Context, agentName, path string) (int64
 	}
 	events := agent.EventsWithSession(sessID, u.Events)
 	if err := r.store.ReplaceEvents(ctx, sessID, events); err != nil {
+		return 0, false, err
+	}
+	if err := r.writeMessages(ctx, adapter, path, sessID); err != nil {
 		return 0, false, err
 	}
 	settled := extract.Settled(u.MTime, now, r.SettleIdle)
