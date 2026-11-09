@@ -20,7 +20,8 @@ func TestSyncSessionBypassesSettle(t *testing.T) {
 	write(t, p,
 		fmt.Sprintf(`{"type":"workspace-directories","sessionId":"live","directories":[%q]}`, repo)+"\n"+
 			`{"type":"user","sessionId":"live","timestamp":"2026-11-09T09:00:00Z","message":{"role":"user","content":"正在写的会话"}}`+"\n"+
-			`{"type":"assistant","sessionId":"live","timestamp":"2026-11-09T09:01:00Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"TaskCreate","input":{"id":"1","subject":"第一步"}}]}}`+"\n")
+			`{"type":"assistant","sessionId":"live","timestamp":"2026-11-09T09:01:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"call-1","name":"TaskCreate","input":{"subject":"第一步","activeForm":"正在做第一步"}}]}}`+"\n"+
+			`{"type":"user","sessionId":"live","timestamp":"2026-11-09T09:01:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","content":"Task #1 created successfully: 第一步"}]}}`+"\n")
 	s := openTempStore(t)
 	r := New(s, qoder.New(home))
 	r.SettleIdle = 5 * time.Minute
