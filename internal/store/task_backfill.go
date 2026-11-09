@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// BackfillTasks 把旧 task_card 一次性提升为正式任务，任务 id 复用卡片 id。
+// BackfillTasks 把旧 task_card 一次性提升为合并任务，任务 id 复用卡片 id。
 // 标记写在 meta 里，重复 Open 不会重复插入；步骤等下一次扫描再补齐。
 func (s *Store) BackfillTasks(ctx context.Context) error {
 	var done string

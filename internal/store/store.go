@@ -100,10 +100,11 @@ func Open(path string) (*Store, error) {
 				db.Close()
 				return nil, fmt.Errorf("升级库结构（schema_version 1→2）失败：%w", err)
 			}
-		} else {
+		} else if ver != "2" {
 			db.Close()
-			return nil, fmt.Errorf("旧版本库（schema_version %q < %s），需重建（scan --full 会重建索引，但不做 schema 升级）", ver, schemaVersion)
+			return nil, fmt.Errorf("旧版本库（schema_version %q < %s），需重建", ver, schemaVersion)
 		}
+		// ver=="2"→3 只新增 task_step_override 表，下面的 schemaSQL 会建，无需数据迁移。
 	}
 
 	// 版本兼容后才建表，避免把新版本已删除的对象重新建出来。

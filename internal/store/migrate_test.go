@@ -85,7 +85,7 @@ func TestListTasksKindAndSort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 合并任务：本体一小时内动过，创建也晚。
+	// 合并任务：本体一小时前动过，没有关联会话 → 排序键就是 now-1h。
 	merged, err := s.CreateTask(ctx, domain.Task{
 		ProjectID: pid, Goal: "合并任务",
 		CreatedAt: now.Add(-1 * time.Hour), UpdatedAt: now.Add(-1 * time.Hour),
@@ -93,34 +93,65 @@ func TestListTasksKindAndSort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 对话任务：本体十小时前就没动了，但半小时前补过步骤——按「最近有内容」它该在最前。
-	conv, err := s.CreateTask(ctx, domain.Task{
-		ProjectID: pid, Kind: domain.TaskKindSession, SessionID: 11, Goal: "更早创建的对话",
-		CreatedAt: now.Add(-10 * time.Hour), UpdatedAt: now.Add(-10 * time.Hour),
-		Steps: []domain.TaskStep{{Subject: "补一步", Status: domain.StepDone, CreatedAt: now, UpdatedAt: now.Add(-30 * time.Minute)}},
+	// 对话任务：本体十小时前就没动了，但那次对话半小时前还在写。
+	// 按更新时间它会沉底，按对话时间它必须排最前；步骤刚被补过也不该把它抬上来。
+	sessID, err := s.UpsertSession(ctx, domain.Session{
+		Agent: "qoder", ExternalID: "sort-1", ProjectID: pid, Title: "半小时前的对话",
+		Path: `C:\sessions\sort-1.jsonl`, UpdatedAt: now.Add(-30 * time.Minute),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	conv, err := s.CreateTask(ctx, domain.Task{
+		ProjectID: pid, Kind: domain.TaskKindSession, SessionID: sessID, Goal: "更早创建的对话",
+		CreatedAt: now.Add(-10 * time.Hour), UpdatedAt: now.Add(-10 * time.Hour),
+		Steps: []domain.TaskStep{{Subject: "刚补的一步", Status: domain.StepDone, CreatedAt: now, UpdatedAt: now}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.LinkTaskSession(ctx, conv, sessID, "source", now.Add(-30*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	// 扫描过的对话任务：那次对话八小时前就结束了，但每次扫描都会把本体 updated_at
+	// 刷成扫描时间。它必须仍排在后面——排序不能退化成「按扫描时间排」。
+	staleSessID, err := s.UpsertSession(ctx, domain.Session{
+		Agent: "qoder", ExternalID: "sort-2", ProjectID: pid, Title: "八小时前的对话",
+		Path: `C:\sessions\sort-2.jsonl`, UpdatedAt: now.Add(-8 * time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleConv, err := s.CreateTask(ctx, domain.Task{
+		ProjectID: pid, Kind: domain.TaskKindSession, SessionID: staleSessID, Goal: "扫描刷过本体时间的对话",
+		CreatedAt: now.Add(-9 * time.Hour), UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.LinkTaskSession(ctx, staleConv, staleSessID, "source", now); err != nil {
+		t.Fatal(err)
+	}
 
 	sessionTasks, err := s.ListTasks(ctx, TaskFilter{Kind: domain.TaskKindSession, Limit: 10})
-	if err != nil || len(sessionTasks) != 1 || sessionTasks[0].ID != conv {
-		t.Fatalf("kind=session 应只出对话任务：%+v err=%v", sessionTasks, err)
+	if err != nil || len(sessionTasks) != 2 {
+		t.Fatalf("kind=session 应只出两条对话任务：%+v err=%v", sessionTasks, err)
 	}
 	formalTasks, err := s.ListTasks(ctx, TaskFilter{Kind: domain.TaskKindFormal, Limit: 10})
 	if err != nil || len(formalTasks) != 1 || formalTasks[0].ID != merged {
 		t.Fatalf("kind=formal 应只出合并任务：%+v err=%v", formalTasks, err)
 	}
 	byActivity, err := s.ListTasks(ctx, TaskFilter{Limit: 10})
-	if err != nil || len(byActivity) != 2 || byActivity[0].ID != conv {
-		t.Fatalf("默认应按最近有内容排序：%+v err=%v", byActivity, err)
+	if err != nil || len(byActivity) != 3 ||
+		byActivity[0].ID != conv || byActivity[1].ID != merged || byActivity[2].ID != staleConv {
+		t.Fatalf("默认应按最近对话排序（半小时 > 一小时 > 八小时，本体扫描时间不算）：%+v err=%v", byActivity, err)
 	}
 	byCreated, err := s.ListTasks(ctx, TaskFilter{Sort: "created", Limit: 10})
-	if err != nil || len(byCreated) != 2 || byCreated[0].ID != merged {
+	if err != nil || len(byCreated) != 3 || byCreated[0].ID != merged {
 		t.Fatalf("按创建时间排序失效：%+v err=%v", byCreated, err)
 	}
 	byIdle, err := s.ListTasks(ctx, TaskFilter{Sort: "idle", Limit: 10})
-	if err != nil || len(byIdle) != 2 || byIdle[0].ID != merged {
+	if err != nil || len(byIdle) != 3 || byIdle[0].ID != staleConv || byIdle[2].ID != conv {
 		t.Fatalf("按最久没动排序失效：%+v err=%v", byIdle, err)
 	}
 }

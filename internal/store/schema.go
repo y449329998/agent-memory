@@ -207,6 +207,14 @@ CREATE TABLE IF NOT EXISTS task_session (
   PRIMARY KEY(task_id, session_id)
 );
 
+CREATE TABLE IF NOT EXISTS task_step_override (
+  task_id     INTEGER NOT NULL REFERENCES task(id) ON DELETE CASCADE,
+  source_key  TEXT    NOT NULL,
+  status      TEXT    NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  PRIMARY KEY (task_id, source_key)
+);
+
 CREATE TABLE IF NOT EXISTS summary (
   entity_kind  TEXT NOT NULL,
   entity_id    INTEGER NOT NULL,
@@ -239,4 +247,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session ON task(session_id) WHERE kin
 CREATE INDEX IF NOT EXISTS idx_task_kind ON task(kind, archived_at, project_id);
 `
 
-const schemaVersion = "2"
+const schemaVersion = "3"

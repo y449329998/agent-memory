@@ -281,11 +281,17 @@ func (s *Store) ListTasks(ctx context.Context, f TaskFilter) ([]domain.Task, err
 		q += ` AND updated_at <= ?`
 		args = append(args, f.UpdatedBefore.Unix())
 	}
-	// activity 把任务本体、步骤与片段的时间合成一个「最近有内容」时刻，
-	// 只按 updated_at 排会让补录步骤或新片段的老任务沉底。
-	const activity = `MAX(task.updated_at,
-	  IFNULL((SELECT MAX(ts.updated_at) FROM task_step ts WHERE ts.task_id = task.id), 0),
-	  IFNULL((SELECT MAX(sn.ts) FROM task_snippet sn WHERE sn.task_id = task.id), 0))`
+	// 排序键取「这个任务最近一次对话发生在什么时候」：关联会话的 updated_at 与
+	// 排序看「最近对话」：关联会话的最新时间与片段事件时间取最新的那个。
+	// 任务本体的 updated_at 不参与：扫描会把它刷成最近一次扫描时间，
+	// 掺进来等于按扫描时间排，早就没动的老对话也会浮到顶上。
+	// 只有既没会话又没片段（手工新建的合并任务）才退回本体时间。
+	const activity = `CASE WHEN EXISTS (SELECT 1 FROM task_session ts WHERE ts.task_id = task.id)
+	  OR EXISTS (SELECT 1 FROM task_snippet sn WHERE sn.task_id = task.id)
+	  THEN MAX(
+	    IFNULL((SELECT MAX(se.updated_at) FROM task_session ts JOIN session se ON se.id = ts.session_id WHERE ts.task_id = task.id), 0),
+	    IFNULL((SELECT MAX(sn.ts) FROM task_snippet sn WHERE sn.task_id = task.id), 0))
+	  ELSE task.updated_at END`
 	switch f.Sort {
 	case "created":
 		q += ` ORDER BY created_at DESC, id DESC`
@@ -321,6 +327,11 @@ func (s *Store) ListTasks(ctx context.Context, f TaskFilter) ([]domain.Task, err
 			return nil, err
 		}
 		if ok {
+			ov, err := s.stepOverrides(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			applyOverrides(&task, ov)
 			out = append(out, task)
 		}
 	}
@@ -492,6 +503,14 @@ func (s *Store) TaskDetail(ctx context.Context, id int64) (TaskDetail, bool, err
 		return TaskDetail{}, false, err
 	}
 	detail.Sessions, err = s.taskSessions(ctx, id)
+	if err != nil {
+		return TaskDetail{}, false, err
+	}
+	ov, err := s.stepOverrides(ctx, id)
+	if err != nil {
+		return TaskDetail{}, false, err
+	}
+	applyOverrides(&detail.Task, ov)
 	return detail, true, err
 }
 
