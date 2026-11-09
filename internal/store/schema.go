@@ -215,6 +215,27 @@ CREATE TABLE IF NOT EXISTS task_step_override (
   PRIMARY KEY (task_id, source_key)
 );
 
+CREATE TABLE IF NOT EXISTS session_message (
+  id          INTEGER PRIMARY KEY,
+  session_id  INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+  seq         INTEGER NOT NULL,
+  role        TEXT NOT NULL DEFAULT '',
+  kind        TEXT NOT NULL DEFAULT '',
+  text        TEXT NOT NULL DEFAULT '',
+  tool        TEXT NOT NULL DEFAULT '',
+  files_json  TEXT NOT NULL DEFAULT '[]',
+  ts          INTEGER NOT NULL DEFAULT 0,
+  truncated   INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(session_id, seq)
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_message_session ON session_message(session_id, seq);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS session_message_fts USING fts5(
+  text_seg,
+  tokenize = 'unicode61'
+);
+
 CREATE TABLE IF NOT EXISTS summary (
   entity_kind  TEXT NOT NULL,
   entity_id    INTEGER NOT NULL,
@@ -247,4 +268,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session ON task(session_id) WHERE kin
 CREATE INDEX IF NOT EXISTS idx_task_kind ON task(kind, archived_at, project_id);
 `
 
-const schemaVersion = "3"
+const schemaVersion = "4"

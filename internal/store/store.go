@@ -100,11 +100,11 @@ func Open(path string) (*Store, error) {
 				db.Close()
 				return nil, fmt.Errorf("升级库结构（schema_version 1→2）失败：%w", err)
 			}
-		} else if ver != "2" {
+		} else if ver != "2" && ver != "3" {
 			db.Close()
 			return nil, fmt.Errorf("旧版本库（schema_version %q < %s），需重建", ver, schemaVersion)
 		}
-		// ver=="2"→3 只新增 task_step_override 表，下面的 schemaSQL 会建，无需数据迁移。
+		// ver=="2"→3 建 task_step_override，"3"→4 建 session_message(+FTS)，都由 schemaSQL 完成。
 	}
 
 	// 版本兼容后才建表，避免把新版本已删除的对象重新建出来。
