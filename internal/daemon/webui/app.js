@@ -1235,7 +1235,8 @@
     source.value = params.get('source_agent') || '';
     range.value = params.get('range') || '';
     sort.value = params.get('sort') || '';
-    kind.value = params.has('kind') ? params.get('kind') : 'session';
+    // 默认「全部」：MCP / 桌面端新建的是合并任务，只给对话任务视图会把它们藏起来。
+    kind.value = params.get('kind') || '';
     $('tasks-archived').checked = params.get('archived') === '1';
     [kind, project, status, source, range, sort].forEach(enhanceSelect);
     api('/v1/projects').then((d) => {
@@ -1270,7 +1271,7 @@
         clear(list);
         tasks.forEach((t) => list.appendChild(taskCard(t, { when: true, link: true })));
         if (!tasks.length) list.appendChild(el('p', 'empty', kind.value === 'session' ? '还没有对话任务，跑一轮同步就会把各 agent 的会话整理进来。' : '还没有任务。'));
-        const sortLabel = sort.options[sort.selectedIndex] ? sort.options[sort.selectedIndex].textContent : '最近有内容';
+        const sortLabel = sort.options[sort.selectedIndex] ? sort.options[sort.selectedIndex].textContent : '最近对话';
         $('tasks-meta').textContent = '共 ' + tasks.length + ' 条 · 按' + sortLabel + '排序';
       } catch (e) {
         clear(list);

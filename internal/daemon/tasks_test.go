@@ -22,11 +22,23 @@ func TestTaskListKindAndSortParams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateTask(ctx, domain.Task{
-		ProjectID: pid, Kind: domain.TaskKindSession, SessionID: 1, Goal: "对话里的活",
+	// 对话任务：本体两小时前就没动了，但那次对话半小时前还在写；步骤刚补过也不算数。
+	sessID, err := st.UpsertSession(ctx, domain.Session{
+		Agent: "qoder", ExternalID: "kind-1", ProjectID: pid, Title: "半小时前的对话",
+		Path: `C:\sessions\kind-1.jsonl`, UpdatedAt: now.Add(-30 * time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conv, err := st.CreateTask(ctx, domain.Task{
+		ProjectID: pid, Kind: domain.TaskKindSession, SessionID: sessID, Goal: "对话里的活",
 		CreatedAt: now.Add(-3 * time.Hour), UpdatedAt: now.Add(-2 * time.Hour),
-		Steps: []domain.TaskStep{{Subject: "半小时前补的步骤", Status: domain.StepDone, CreatedAt: now, UpdatedAt: now.Add(-30 * time.Minute)}},
-	}); err != nil {
+		Steps: []domain.TaskStep{{Subject: "刚补的步骤", Status: domain.StepDone, CreatedAt: now, UpdatedAt: now}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.LinkTaskSession(ctx, conv, sessID, "source", now.Add(-30*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.CreateTask(ctx, domain.Task{
@@ -59,7 +71,7 @@ func TestTaskListKindAndSortParams(t *testing.T) {
 		}
 	}
 
-	// 默认按「最近有内容」：对话任务虽然本体两小时没动，仍是第一条；
+	// 默认按「最近对话」：对话任务虽然本体两小时没动，仍是第一条；
 	// sort=created 才让合并任务排前面。
 	rec := webDo(t, s, http.MethodGet, "/v1/tasks", webToken, nil, nil)
 	var listed struct {
@@ -81,6 +93,68 @@ func TestTaskListKindAndSortParams(t *testing.T) {
 	}
 	if len(listed.Tasks) != 2 || listed.Tasks[0].Goal != "整理好的活" {
 		t.Fatalf("sort=created 排序 = %+v", listed.Tasks)
+	}
+}
+
+// TestMCPTaskAddVisibleInDefaultList 覆盖 agent 侧建任务的可见性：
+// task_add 建的是合并任务，默认列表（不带 kind）必须能看到它并排在最前，
+// 否则「MCP 加了任务但任务页没反应」就是静默丢数据。
+func TestMCPTaskAddVisibleInDefaultList(t *testing.T) {
+	s, st := newTestServer(t)
+	ctx := context.Background()
+	now := time.Now()
+	dir := t.TempDir()
+	pid, err := st.EnsureProject(ctx, "f:/mcp-add", "mcp-add", "", dir, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessID, err := st.UpsertSession(ctx, domain.Session{
+		Agent: "qoder", ExternalID: "mcp-add-1", ProjectID: pid, Title: "半小时前的对话",
+		Path: `C:\sessions\mcp-add-1.jsonl`, UpdatedAt: now.Add(-30 * time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conv, err := st.CreateTask(ctx, domain.Task{
+		ProjectID: pid, Kind: domain.TaskKindSession, SessionID: sessID, Goal: "对话里的活",
+		CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.LinkTaskSession(ctx, conv, sessID, "source", now.Add(-30*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := s.AddTask(ctx, mcp.AddTaskInput{
+		ProjectPath: dir, Goal: "MCP 刚建的合并任务", Steps: []mcp.TaskStepInput{{Subject: "第一步", Status: domain.StepDone}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := int64(out.(map[string]any)["id"].(int64))
+
+	rec := webDo(t, s, http.MethodGet, "/v1/tasks", webToken, nil, nil)
+	var listed struct {
+		Tasks []struct {
+			ID   int64
+			Goal string
+			Kind string
+		} `json:"tasks"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Tasks) != 2 || listed.Tasks[0].ID != id || listed.Tasks[0].Kind != "formal" {
+		t.Fatalf("默认列表应含 MCP 新建的合并任务且排在最前：%+v", listed.Tasks)
+	}
+	// 它没有关联会话，所以「最近对话」只能用本体时间——这正是兜底路径。
+	one, ok, err := st.TaskDetail(ctx, id)
+	if err != nil || !ok {
+		t.Fatalf("task detail ok=%v err=%v", ok, err)
+	}
+	if len(one.Sessions) != 0 || len(one.Snippets) != 0 {
+		t.Fatalf("手工建的合并任务不该带会话与片段：%+v", one)
 	}
 }
 

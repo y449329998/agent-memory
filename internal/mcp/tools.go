@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 type SearchInput struct {
@@ -47,6 +48,7 @@ type TaskStepInput struct {
 	Description string `json:"description"`
 	ActiveForm  string `json:"active_form"`
 	Status      string `json:"status"`
+	SourceKey   string `json:"source_key"`
 }
 
 type AddTaskInput struct {
@@ -59,13 +61,20 @@ type AddTaskInput struct {
 }
 
 type UpdateTaskInput struct {
-	ID         int64            `json:"id"`
-	Goal       *string          `json:"goal"`
-	Status     *string          `json:"status"`
-	NextSteps  *string          `json:"next_steps"`
-	OwnerAgent *string          `json:"owner_agent"`
-	Archived   *bool            `json:"archived"`
-	Steps      *[]TaskStepInput `json:"steps"`
+	ID         int64             `json:"id"`
+	Goal       *string           `json:"goal"`
+	Status     *string           `json:"status"`
+	NextSteps  *string           `json:"next_steps"`
+	OwnerAgent *string           `json:"owner_agent"`
+	Archived   *bool             `json:"archived"`
+	Steps      *[]TaskStepInput  `json:"steps"`
+	StepStatus map[string]string `json:"step_status"`
+}
+
+// SyncTaskInput 定向同步一个会话成对话任务（不等静默窗口）。
+type SyncTaskInput struct {
+	ProjectPath string `json:"project_path"`
+	SessionID   string `json:"session_id"`
 }
 
 // ToolAPI 是 MCP 层与共享记忆之间的全部接触面。
@@ -79,6 +88,7 @@ type ToolAPI interface {
 	TaskGet(ctx context.Context, id int64) (any, error)
 	AddTask(ctx context.Context, in AddTaskInput) (any, error)
 	UpdateTask(ctx context.Context, in UpdateTaskInput) (any, error)
+	SyncTask(ctx context.Context, in SyncTaskInput) (any, error)
 	ExportTask(ctx context.Context, id int64) (any, error)
 	ResolveProject(ctx context.Context, path string) (any, error)
 	Stats(ctx context.Context) (any, error)
@@ -142,7 +152,7 @@ func (s *Server) toolDefinitions() []toolDef {
 			})},
 		{"task_get", "按 id 取单张任务卡的全部内容。task_list 之后按需展开细节用这个，别把整份简报复述一遍。",
 			objectSchema(map[string]any{"id": map[string]any{"type": "integer"}}, "id")},
-		{"task_add", "新建正式任务，可带步骤。",
+		{"task_add", "新建合并任务（跨对话收尾时把进展汇总成一条），可带步骤。一次对话的对话任务由扫描自动生成，不用这个建。",
 			objectSchema(map[string]any{
 				"project_path": map[string]any{"type": "string"},
 				"goal":         map[string]any{"type": "string"},
@@ -151,7 +161,7 @@ func (s *Server) toolDefinitions() []toolDef {
 				"owner_agent":  map[string]any{"type": "string"},
 				"steps":        map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
 			}, "project_path", "goal")},
-		{"task_update", "更新任务、认领、归档或整组替换步骤。",
+		{"task_update", "更新任务。status/owner/next_steps/step_status 不冻结扫描同步；改 goal 或整组 steps 文本才算人工接管。step_status 按 source_key 改单个步骤状态。",
 			objectSchema(map[string]any{
 				"id":          map[string]any{"type": "integer"},
 				"goal":        map[string]any{"type": "string"},
@@ -160,7 +170,13 @@ func (s *Server) toolDefinitions() []toolDef {
 				"owner_agent": map[string]any{"type": "string"},
 				"archived":    map[string]any{"type": "boolean"},
 				"steps":       map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
+				"step_status": map[string]any{"type": "object"},
 			}, "id")},
+		{"task_sync", "把指定会话立刻同步成对话任务（不等静默窗口）。不传 session_id 取该项目最近修改的会话；返回 task_id 与快照。",
+			objectSchema(map[string]any{
+				"project_path": map[string]any{"type": "string"},
+				"session_id":   map[string]any{"type": "string"},
+			}, "project_path")},
 		{"task_export", "导出交接 Prompt，带同一个 task_id。",
 			objectSchema(map[string]any{"id": map[string]any{"type": "integer"}}, "id")},
 		{"project_resolve", "把任意目录路径解析成共享库里的 project_key，用来确认两个 agent 看的是同一个项目。",
@@ -239,6 +255,15 @@ func (s *Server) callTool(ctx context.Context, raw json.RawMessage) (any, error)
 				return nil, fmt.Errorf("id must be a positive integer")
 			}
 			return s.api.UpdateTask(ctx, in)
+		case "task_sync":
+			var in SyncTaskInput
+			if err := bind(p.Arguments, &in); err != nil {
+				return nil, err
+			}
+			if strings.TrimSpace(in.ProjectPath) == "" {
+				return nil, fmt.Errorf("project_path is required")
+			}
+			return s.api.SyncTask(ctx, in)
 		case "task_export":
 			var in struct {
 				ID int64 `json:"id"`

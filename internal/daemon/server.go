@@ -19,6 +19,7 @@ import (
 	"github.com/muyi99/agent-memory/internal/compose"
 	"github.com/muyi99/agent-memory/internal/config"
 	"github.com/muyi99/agent-memory/internal/domain"
+	"github.com/muyi99/agent-memory/internal/ingest"
 	"github.com/muyi99/agent-memory/internal/normalize"
 	"github.com/muyi99/agent-memory/internal/store"
 )
@@ -56,12 +57,17 @@ type Server struct {
 	st  *store.Store
 	mux *http.ServeMux
 
+	runner *ingest.Runner
+
 	listenMu   sync.Mutex
 	httpServer *http.Server
 	listener   net.Listener
 	portPath   string
 	actualPort int
 }
+
+// SetRunner 供 serve 装配定向同步能力（task_sync）；未设置时该工具报错。
+func (s *Server) SetRunner(r *ingest.Runner) { s.runner = r }
 
 func New(cfg Config, st *store.Store) *Server {
 	s := &Server{cfg: cfg, st: st, mux: http.NewServeMux()}

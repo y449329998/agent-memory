@@ -180,6 +180,9 @@ func (a stubAPI) AddTask(ctx context.Context, in AddTaskInput) (any, error) {
 func (a stubAPI) UpdateTask(ctx context.Context, in UpdateTaskInput) (any, error) {
 	return map[string]any{"id": in.ID}, nil
 }
+func (a stubAPI) SyncTask(ctx context.Context, in SyncTaskInput) (any, error) {
+	return map[string]any{"task_id": 1, "settled": false}, nil
+}
 func (a stubAPI) ExportTask(ctx context.Context, id int64) (any, error) {
 	return map[string]any{"markdown": "task_id: 1"}, nil
 }

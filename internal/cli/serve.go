@@ -126,6 +126,7 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 			return scanResult(res), nil
 		},
 	}, e.st)
+	srv.SetRunner(ingest.New(e.st, buildAdapters(e.cfg)...))
 
 	fmt.Fprintf(stdout, "serve on 127.0.0.1 (token: %s)\n", e.cfg.TokenPath())
 	fmt.Fprintf(stdout, "agents: %v\n", scan.AgentNames())

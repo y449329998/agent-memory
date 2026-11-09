@@ -2,8 +2,11 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/muyi99/agent-memory/internal/compose"
@@ -160,27 +163,92 @@ func (s *Server) AddTask(ctx context.Context, in mcp.AddTaskInput) (any, error) 
 }
 
 func (s *Server) UpdateTask(ctx context.Context, in mcp.UpdateTaskInput) (any, error) {
+	now := time.Now()
+	for key, status := range in.StepStatus {
+		if err := s.st.SetStepOverride(ctx, in.ID, key, status, now); err != nil {
+			return nil, err
+		}
+	}
 	var steps *[]domain.TaskStep
 	if in.Steps != nil {
 		converted := make([]domain.TaskStep, 0, len(*in.Steps))
 		for _, step := range *in.Steps {
 			converted = append(converted, domain.TaskStep{
 				Subject: step.Subject, Description: step.Description,
-				ActiveForm: step.ActiveForm, Status: step.Status,
+				ActiveForm: step.ActiveForm, Status: step.Status, SourceKey: step.SourceKey,
 			})
 		}
 		steps = &converted
 	}
+	changed := in.Goal != nil || in.Status != nil || in.NextSteps != nil || in.OwnerAgent != nil || in.Archived != nil || steps != nil
+	if !changed {
+		detail, ok, err := s.st.TaskDetail(ctx, in.ID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, domain.ErrTaskCardNotFound
+		}
+		return detail, nil
+	}
 	task, err := s.st.UpdateTask(ctx, store.TaskUpdate{
 		ID: in.ID, Goal: in.Goal, Status: in.Status, NextSteps: in.NextSteps,
 		OwnerAgent: in.OwnerAgent, Archived: in.Archived, Steps: steps,
-	}, time.Now())
+	}, now)
 	if err != nil {
 		return nil, err
 	}
 	s.markTaskSummary(ctx, task.ID)
 	s.refreshTaskHandoff(ctx, task.ProjectID)
 	return task, nil
+}
+
+// SyncTask 定向同步一个会话成对话任务，绕过静默窗口与哈希门控。
+func (s *Server) SyncTask(ctx context.Context, in mcp.SyncTaskInput) (any, error) {
+	if s.runner == nil {
+		return nil, fmt.Errorf("runner not configured")
+	}
+	path := in.SessionID
+	if path == "" {
+		p, err := s.latestSessionPath(ctx, in.ProjectPath)
+		if err != nil {
+			return nil, err
+		}
+		path = p
+	}
+	id, settled, err := s.runner.SyncSession(ctx, agentFromPath(path), path)
+	if err != nil {
+		return nil, err
+	}
+	detail, _, err := s.st.TaskDetail(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"task_id": id, "settled": settled, "session_path": path, "task": detail}, nil
+}
+
+// latestSessionPath 取该项目下最近更新的会话文件路径。
+func (s *Server) latestSessionPath(ctx context.Context, projectPath string) (string, error) {
+	pid, ok, err := s.st.ResolveProjectByPath(ctx, projectPath)
+	if err != nil || !ok {
+		return "", fmt.Errorf("unknown project %q", projectPath)
+	}
+	sessions, err := s.st.ListSessions(ctx, pid, 1)
+	if err != nil {
+		return "", err
+	}
+	if len(sessions) == 0 {
+		return "", fmt.Errorf("该项目下没有可同步的会话")
+	}
+	return sessions[0].Path, nil
+}
+
+// agentFromPath 按目录判断会话归属：.workbuddy → workbuddy，其余 → qoder。
+func agentFromPath(path string) string {
+	if strings.Contains(filepath.ToSlash(path), ".workbuddy") {
+		return "workbuddy"
+	}
+	return "qoder"
 }
 
 func (s *Server) ExportTask(ctx context.Context, id int64) (any, error) {

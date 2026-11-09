@@ -12,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/muyi99/agent-memory/internal/agent/qoder"
 	"github.com/muyi99/agent-memory/internal/domain"
+	"github.com/muyi99/agent-memory/internal/ingest"
 	"github.com/muyi99/agent-memory/internal/store"
 )
 
@@ -28,6 +30,7 @@ func newTestServer(t *testing.T, mutate ...func(*Config)) (*Server, *store.Store
 		m(&cfg)
 	}
 	s := New(cfg, st)
+	s.SetRunner(ingest.New(st, qoder.New(t.TempDir())))
 	return s, st
 }
 

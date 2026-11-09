@@ -385,8 +385,9 @@ func terminateAndWait(cmd *exec.Cmd, done <-chan struct{}) {
 func openWindowOnce(link string, cfg config.Config, logger *log.Logger) {
 	var initial *windowState
 	if st, ok := loadWindowState(cfg.DataDir); ok {
-		sw, sh := screenSize()
-		st = clampWindowState(st, sw, sh, windowWidth, windowHeight)
+		if sw, sh := screenSize(); sw > 0 && sh > 0 {
+			st = clampWindowState(st, sw, sh, windowWidth, windowHeight)
+		}
 		initial = &st
 	}
 
@@ -475,24 +476,37 @@ func openBrowserApp(link string) error {
 	return fmt.Errorf("无法启动浏览器窗口：%s", strings.Join(tried, "、"))
 }
 
-// browserCandidates 按优先级列出 Edge / Chrome 的常见安装路径。
+// browserCandidates 按当前平台列出 Edge / Chrome / Chromium 的常见位置。
+// Windows 查安装目录，macOS 查 .app 包内的可执行文件，Linux 走 PATH。
 func browserCandidates() []string {
-	bases := []string{
-		os.Getenv("ProgramFiles(x86)"),
-		os.Getenv("ProgramFiles"),
-		os.Getenv("LOCALAPPDATA"),
-	}
-	var out []string
-	for _, base := range bases {
-		if base == "" {
-			continue
+	switch runtime.GOOS {
+	case "darwin":
+		return []string{
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+			"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+			"/Applications/Chromium.app/Contents/MacOS/Chromium",
 		}
-		out = append(out,
-			filepath.Join(base, "Microsoft", "Edge", "Application", "msedge.exe"),
-			filepath.Join(base, "Google", "Chrome", "Application", "chrome.exe"),
-		)
+	case "windows":
+		var out []string
+		for _, base := range []string{os.Getenv("ProgramFiles(x86)"), os.Getenv("ProgramFiles"), os.Getenv("LOCALAPPDATA")} {
+			if base == "" {
+				continue
+			}
+			out = append(out,
+				filepath.Join(base, "Microsoft", "Edge", "Application", "msedge.exe"),
+				filepath.Join(base, "Google", "Chrome", "Application", "chrome.exe"),
+			)
+		}
+		return out
+	default:
+		var out []string
+		for _, name := range []string{"microsoft-edge", "google-chrome", "chromium", "chromium-browser"} {
+			if path, err := exec.LookPath(name); err == nil {
+				out = append(out, path)
+			}
+		}
+		return out
 	}
-	return out
 }
 
 // openAppLog 打开 <DataDir>/app.log（追加、带时间戳）；外部传入 Logger 时直接使用。
