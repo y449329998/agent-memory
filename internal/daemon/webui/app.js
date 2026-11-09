@@ -1391,7 +1391,8 @@
         convSize = d.file_size || convSize;
         convMode = d.source === 'db' ? 'db' : (d.source === 'file' ? 'file' : 'store');
         const frag = document.createDocumentFragment();
-        (d.messages || []).forEach(function (m) {
+        // 最新在最上面，「加载更早」把更早的消息接在下面
+        (d.messages || []).slice().reverse().forEach(function (m) {
           const wrap = el('div', 'snippet');
           wrap.appendChild(el('div', 'meta', (m.Role || m.role || '') + ' · ' + fmtTime(m.Ts || m.ts)));
           const body = el('div', 'md');
@@ -1400,7 +1401,7 @@
           wrap.appendChild(body);
           frag.appendChild(wrap);
         });
-        if (reset || convNext === 0) box.appendChild(frag); else box.insertBefore(frag, box.firstChild);
+        box.appendChild(frag);
         if (d.source === 'db') {
           convNext = d.next || 0;
           $('conv-more').hidden = !convNext;
