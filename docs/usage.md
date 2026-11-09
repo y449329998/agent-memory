@@ -393,6 +393,7 @@ SQLite FTS5 默认分词搜不到中文（实测：「用户偏好」里搜「�
 - 扫描不再把新会话折叠进「同项目同 owner 的进行中任务」（旧 `FindAttachableTask` 行为已删除）；想关联到合并任务请显式合并。
 - **人工状态覆盖层**：在详情页把某个**稳定 key** 的步骤改成 done/blocked 等，会写进 `task_step_override`（按 `task_id + source_key`），扫描照常刷新步骤文本、展示时叠加人工状态。反推步骤的 key 是 `cmd:0` 这类序号，不接受单独改状态（只能改整条任务状态或编辑步骤文本）。
 - **分层 freeze**：改状态 / owner / 下一步 / 归档 **不再**冻结扫描同步；只有改目标或整组步骤文本才置 `manual_edited_at`，之后扫描只更新片段。MCP `task_update` 同此语义，另支持 `step_status`（按 `source_key` 改单个步骤）与步骤里的 `source_key`。
+- **完整对话**：`session_message` 存每场会话的完整消息——用户/助手全文（单条 100k 上限）、工具调用摘要（命令/文件路径，≤2000 字）、工具报错（≤4000 字），工具成功结果不入库。会话文件一变就整场重写，所以 agent 每次回复落盘后自动更新；`task_snippet` 仍只留最近 20 条服务列表与交接。检索用 `conversation_search`（FTS5 + 中文二元组），翻页用 `conversation_get` 或详情页「加载更早」。
 - 任务可以关联多场会话（`task_session`）；完成满 30 天自动归档，归档任务从活动列表和简报隐藏，可在任务页恢复。
 - 任务页排序默认「最近对话」：有会话或片段时只看对话时间 = `MAX(关联会话最新 updated_at, 片段事件最新 ts)`；两者都没有（手工新建的合并任务）才退回 `task.updated_at`。本体的更新时间会被扫描刷成扫描时间，所以不参与排序，否则等于按扫描时间排。可选 `created`（按创建）/ `idle`（最久没动排在最前）。筛选条件一改就重新查询并写进 URL（`kind`、`q`、`project_key`、`status`、`owner_agent`、`source_agent`、`updated_after`、`sort`、`include_archived`），前进后退都保持。
 - 配置 LLM 后，记忆与任务会在写入/同步后异步生成中文摘要；原文始终保留。列表优先显示摘要并标「AI 摘要」，任务详情同时能看到摘要与原始目标/下一步，失败时自动退回规则字段。
@@ -551,6 +552,8 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 | `task_add` | 新建合并任务（`kind=formal`），可带步骤 |
 | `task_update` | 更新目标/状态/下一步/owner/归档；`step_status`（按 `source_key` 改单步状态，不冻结）；`steps` 整组替换文本（会冻结扫描同步） |
 | `task_sync` | 把指定会话立刻同步成对话任务（不等静默窗口）；`session_id` 可省，缺省取该项目最近修改的会话 |
+| `conversation_search` | 在完整对话历史里检索（中文两字词可命中），可按 `project_path` / `task_id` 收窄 |
+| `conversation_get` | 按 `before_seq` 游标读某个任务的完整对话，`next=0` 表示到头 |
 | `task_export` | 导出交接 Prompt（带同一个 task_id） |
 | `project_resolve` | 路径 → project_key |
 | `stats` | 库统计 |
@@ -578,7 +581,7 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 | GET | `/v1/task` | 会话摘要卡：`?project_path=&status=&limit=` |
 | GET | `/v1/tasks` | 任务：`?kind=session\|formal=&project_key=&status=&q=&owner_agent=&source_agent=&updated_after=&updated_before=&include_archived=&sort=created\|idle=&limit=&offset=`（不传 `kind` 返回两类；不传 `sort` 按「最近对话」） |
 | GET | `/v1/tasks/item` | `?id=`，任务、步骤、片段、来源会话 |
-| GET | `/v1/task/conversation` | `?task_id=&before=&limit=`：`before=0` 返回库里最近片段；`before=文件偏移` 按字节窗口回溯源 jsonl，源不可读回 `source=store_only` |
+| GET | `/v1/task/conversation` | `?task_id=&before_seq=&limit=`：完整对话表优先（`source=db`，按 seq 游标往前翻）；旧库还没写消息时回退源文件（`source=file`/`store`） |
 | GET | `/v1/task/files` | `?task_id=`，按文件聚合的改动（路径/次数/最近时间/来源 agent） |
 | POST | `/v1/tasks/step/status` | `{task_id, source_key, status}`，写步骤状态覆盖，不冻结扫描 |
 | POST | `/v1/tasks` | `{project_path, goal, status?, next_steps?, owner_agent?, steps?}`，建出的任务 `kind=formal` |
@@ -682,7 +685,7 @@ Windows 上仓库配置了 `core.autocrlf=true`，工作区是 CRLF，`gofmt -l 
 git show :internal/store/memory.go | gofmt -d
 ```
 
-数据库 schema 版本记录在 `meta.schema_version`（当前 `3`）。版本低于二进制时 `Open` 会自动迁移（`1→2` 给 `task` 补 `kind`/`session_id` 并建索引；`2→3` 新增 `task_step_override` 表，只建表不动数据）；高于二进制时拒绝打开并提示升级程序，不会静默降级。
+数据库 schema 版本记录在 `meta.schema_version`（当前 `4`）。版本低于二进制时 `Open` 会自动迁移（`1→2` 给 `task` 补 `kind`/`session_id` 并建索引；`2→3` 新增 `task_step_override`；`3→4` 新增 `session_message` 完整对话表与 FTS，只建表不动数据）；高于二进制时拒绝打开并提示升级程序，不会静默降级。
 
 ### 交叉编译
 

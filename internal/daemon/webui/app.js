@@ -1378,16 +1378,18 @@
 
     $('task-add-step').addEventListener('click', function () { addStep({ Status: 'pending' }); });
 
-    let convNext = 0, convSize = 0;
+    let convNext = 0, convSize = 0, convMode = 'db';
     async function loadConversation(reset) {
       const box = $('snippet-list');
       if (!box) return;
-      if (reset) { clear(box); convNext = 0; }
+      if (reset) { clear(box); convNext = 0; convMode = 'db'; }
       try {
-        const d = await api('/v1/task/conversation?task_id=' + enc(id) + '&before=' + convNext + '&limit=20');
+        const param = convMode === 'db' ? '&before_seq=' + convNext : '&before=' + convNext;
+        const d = await api('/v1/task/conversation?task_id=' + enc(id) + param + '&limit=20');
         if (d.warning) { $('conv-warn').hidden = false; $('conv-warn').textContent = d.warning; }
         else { $('conv-warn').hidden = true; }
         convSize = d.file_size || convSize;
+        convMode = d.source === 'db' ? 'db' : (d.source === 'file' ? 'file' : 'store');
         const frag = document.createDocumentFragment();
         (d.messages || []).forEach(function (m) {
           const wrap = el('div', 'snippet');
@@ -1399,8 +1401,16 @@
           frag.appendChild(wrap);
         });
         if (reset || convNext === 0) box.appendChild(frag); else box.insertBefore(frag, box.firstChild);
-        convNext = (d.source === 'store') ? convSize : (d.next || 0);
-        $('conv-more').hidden = !((d.source === 'file' && d.next > 0) || (d.source === 'store' && convSize > 0));
+        if (d.source === 'db') {
+          convNext = d.next || 0;
+          $('conv-more').hidden = !convNext;
+        } else if (d.source === 'file') {
+          convNext = d.next || 0;
+          $('conv-more').hidden = !convNext;
+        } else {
+          convNext = convSize;
+          $('conv-more').hidden = !(d.source === 'store' && convSize > 0);
+        }
         if (!(d.messages || []).length && reset) box.appendChild(el('p', 'empty', '还没有对话片段。'));
       } catch (e) { box.appendChild(el('p', 'empty', '对话加载失败：' + e.message)); }
     }

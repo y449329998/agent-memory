@@ -83,7 +83,7 @@ agent-memory stats [--json]
 
 ## MCP 接入要点
 
-MCP 暴露 12 个工具：`memory_search` / `memory_add` / `memory_list` / `handoff_get` / `task_list` / `task_get` / `task_add` / `task_update` / `task_sync` / `task_export` / `project_resolve` / `stats`。
+MCP 暴露 14 个工具：`memory_search` / `memory_add` / `memory_list` / `handoff_get` / `task_list` / `task_get` / `task_add` / `task_update` / `task_sync` / `task_export` / `conversation_search` / `conversation_get` / `project_resolve` / `stats`。
 
 `link` 在 agent 的 MCP 配置里启动的是 `agent-memory mcp --port <实际端口>`——一个 stdio 桥，把每行 JSON-RPC 转发给 `serve` 的 `/mcp`，token 通过环境变量 `AGENT_MEMORY_TOKEN` 传入。写入位置：
 
