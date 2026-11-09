@@ -19,6 +19,10 @@
 
 ## 2. 安装
 
+SQLite 驱动是纯 Go 的 `modernc.org/sqlite`，没有 cgo 依赖，Windows / macOS / Linux 都能直接构建。
+
+### Windows
+
 ```bash
 cd F:/go/agent-memory
 go build -o agent-memory.exe ./cmd/agent-memory          # 命令行与服务
@@ -26,18 +30,92 @@ go build -ldflags "-H windowsgui" -o agent-memory-app.exe ./cmd/agent-memory-app
 ./agent-memory.exe init
 ```
 
-不用命令行的直接看第 10.5 节：双击 `agent-memory-app.exe` 即可。
+不用命令行的直接看第 10.5 节：双击 `agent-memory-app.exe` 即可，或用 [releases/agent-memory-setup-x64-0.1.0.exe](../releases/README.md) 安装。
+
+### macOS / Linux
+
+```bash
+CGO_ENABLED=0 go build -o agent-memory ./cmd/agent-memory
+./agent-memory init
+./agent-memory scan
+./agent-memory serve &          # 常驻，见第 2.5 节的托管方式
+```
+
+macOS / Linux 没有桌面窗口应用：WebView2、托盘、开机自启、快捷方式、单实例保护都只在 Windows 构建里。
+这几个功能在非 Windows 上会降级（详见第 2.5 节），命令行、Web UI、HTTP API 与 MCP 完全一致。
 
 `init` 会创建 `~/.agent-memory/config.toml` 与 `memory.db`，并打印发现的 Qoder 目录。若自动发现不到：
 
 ```bash
-./agent-memory.exe init --data-dir F:/my-data --force
+./agent-memory init --data-dir /data/my-memory --force     # Windows 换成 F:/my-data
 # 或手工在 config.toml 写：
 # [qoder]
 # home = 'C:\Users\You\.qoder-cn'
 ```
 
-环境要求：Go 1.22+、Windows/macOS/Linux；本项目在 Windows 10 + Go 1.22.6 上实测（`CGO_ENABLED=0`，使用纯 Go 的 SQLite 驱动）。桌面窗口依赖 Windows 自带的 WebView2 运行时（Win10/11 一般已安装）。
+配置里 `--data-dir` 只在配置不存在时生效；**已存在时必须再加 `--force`**，否则提示忽略（防止配置与实际库不一致）。
+
+环境要求：Go 1.26+（`go.mod` 声明 `go 1.26.0`）。本项目在 Windows 10 + Go 1.26.0 上实测，`linux/amd64`、`linux/arm64`、`darwin/amd64`、`darwin/arm64`、`windows/amd64` 五个目标均可交叉编译（见第 16 节）。桌面窗口依赖 Windows 自带的 WebView2 运行时（Win10/11 一般已安装），缺失时自动回退 Edge/Chrome 的应用窗口。
+
+---
+
+## 2.5 在 macOS / Linux 上用
+
+功能差别只在「界面怎么打开」和「谁把服务常驻」：
+
+```bash
+# 一次性导入
+./agent-memory scan
+./agent-memory doctor                       # 库状态、发现结果、写入目标清单
+
+# 常驻服务（HTTP + MCP + 目录监听）
+./agent-memory serve
+
+# 另开终端，打开 Web UI
+open "http://127.0.0.1:47123/?token=$(cat ~/.agent-memory/token)"      # macOS
+xdg-open "http://127.0.0.1:47123/?token=$(cat ~/.agent-memory/token)"  # Linux
+
+# 接入 agent（先看计划再写）
+./agent-memory link qoder --project "$PWD" --dry-run
+./agent-memory link qoder --project "$PWD"
+```
+
+Linux 交给 systemd 用户服务常驻：
+
+```ini
+# ~/.config/systemd/user/agent-memory.service
+[Unit]
+Description=agent-memory shared memory service
+
+[Service]
+ExecStart=%h/.local/bin/agent-memory serve
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload && systemctl --user enable --now agent-memory
+loginctl enable-linger "$USER"      # 未登录也保持运行
+journalctl --user -u agent-memory -f
+```
+
+macOS 用 LaunchAgent（`~/Library/LaunchAgents/com.agent-memory.serve.plist`，`ProgramArguments` 指向 `agent-memory serve`，`RunAtLoad` 与 `KeepAlive` 设 `true`，`launchctl load` 加载）；只想跑一次就 `nohup ./agent-memory serve >~/.agent-memory/serve.log 2>&1 &`。
+
+平台差异一览：
+
+| 能力 | Windows | macOS / Linux |
+| --- | --- | --- |
+| CLI、`serve`、Web UI、HTTP API、`mcp`、`link` | ✅ | ✅ |
+| 桌面窗口 | WebView2 原生窗口 | 交给浏览器；`agent-memory-app` 会退化（见下） |
+| 系统托盘、关窗驻留 | ✅ | ❌ 托盘不可用，窗口关掉即退出桌面进程（`serve` 子进程仍在跑） |
+| 开机自启、快捷方式 | ✅ | ❌ 用 systemd / LaunchAgent |
+| 单实例保护 | 命名互斥量 | ❌ 别重复启动 `serve`（端口会冲突并报错） |
+| LLM API Key 存储 | DPAPI（加密） | 明文写进 `config.toml`，自己控制文件权限（建议 `chmod 600`） |
+
+`agent-memory-app` 在非 Windows 上仍可构建运行：配置/库/`serve` 照常准备，但窗口用浏览器的 `--app` 模式打开（需要本机装了 Edge / Chrome / Chromium 并在 PATH 里），且没有托盘与自启。日常使用建议直接 `serve` + 浏览器。
+
+源目录发现只有一处受平台影响：Trae 的 `workspaceStorage` 索引默认按 Windows 的 `%APPDATA%` 推导，非 Windows 需要手工配 `[trae] workspace_roots`（Qoder `~/.qoder-cn`、WorkBuddy `~/.workbuddy` 在各平台一致）。
 
 ---
 
@@ -52,6 +130,8 @@ go build -ldflags "-H windowsgui" -o agent-memory-app.exe ./cmd/agent-memory-app
 ./agent-memory.exe link qoder --project . --dry-run   # 先看会改什么
 ./agent-memory.exe link qoder --project .             # 真正接入
 ```
+
+macOS / Linux 把 `./agent-memory.exe` 换成 `./agent-memory`，其余完全相同；常驻方式见第 2.5 节。
 
 `scan` 按 qoder → trae → workbuddy 的固定顺序读三家：Qoder 读 `~/.qoder-cn/memory`、`projects/*/memory` 与会话 jsonl；Trae 读 `~/.trae-cn/memory`（含 `projects/<项目>/project_memory.md`）与 `user_rules/`，并用 `%APPDATA%\Trae CN\User\workspaceStorage` 把项目目录名映射回真实路径；WorkBuddy 读 `~/.workbuddy/MEMORY.md`，并导入 `projects/<项目>/<会话>.jsonl`：带任务清单（`tasks/<会话>/`）的会话导入完整步骤，没有清单的只导入最近 30 天，用来覆盖 WorkBuddy 侧栏的近期任务。Trae 的会话正文在云端，`state.vscdb` 只有界面状态，因此只导入记忆。
 
@@ -308,18 +388,19 @@ SQLite FTS5 默认分词搜不到中文（实测：「用户偏好」里搜「�
 
 **任务分两类**（`task.kind`），一次 agent 对话就是一条**对话任务**：
 
-- `kind=session` 对话任务：扫描按会话幂等生成，一条会话一条，`task.session_id` 是唯一权威绑定（部分唯一索引保证不会重复）。目标取会话标题或摘要卡的目标；步骤优先用 agent 自己的 Todo（WorkBuddy `tasks/<会话>/*.json`），没有就从摘要卡反推（命令/改动 → 已完成，下一步/未决问题 → 待办，报错 → 受阻，上限 12 条）。
+- `kind=session` 对话任务：扫描按会话幂等生成，一条会话一条，`task.session_id` 是唯一权威绑定（部分唯一索引保证不会重复）。目标取会话标题或摘要卡的目标；步骤优先用 agent 自己的 Todo——Qoder 解析会话里的 `TaskCreate`/`TaskUpdate`（按 id 取最后状态，`source_key=qt:<id>`），WorkBuddy 读 `tasks/<会话>/*.json`；两边都没有才从摘要卡反推（命令/改动 → 已完成，下一步/未决问题 → 待办，报错 → 受阻，上限 12 条）。
 - `kind=formal` 合并任务：桌面端或 MCP 显式新建，或用「合并到…」把几条对话任务并成一条。跨对话收尾看这个。
 - 扫描不再把新会话折叠进「同项目同 owner 的进行中任务」（旧 `FindAttachableTask` 行为已删除）；想关联到合并任务请显式合并。
-- 手工编辑过的任务（`manual_edited_at <> 0`）只更新片段，不会被扫描重写目标与步骤。
+- **人工状态覆盖层**：在详情页把某个**稳定 key** 的步骤改成 done/blocked 等，会写进 `task_step_override`（按 `task_id + source_key`），扫描照常刷新步骤文本、展示时叠加人工状态。反推步骤的 key 是 `cmd:0` 这类序号，不接受单独改状态（只能改整条任务状态或编辑步骤文本）。
+- **分层 freeze**：改状态 / owner / 下一步 / 归档 **不再**冻结扫描同步；只有改目标或整组步骤文本才置 `manual_edited_at`，之后扫描只更新片段。MCP `task_update` 同此语义，另支持 `step_status`（按 `source_key` 改单个步骤）与步骤里的 `source_key`。
 - 任务可以关联多场会话（`task_session`）；完成满 30 天自动归档，归档任务从活动列表和简报隐藏，可在任务页恢复。
-- 任务页排序默认「最近有内容」= `MAX(task.updated_at, 步骤最新 updated_at, 片段最新 ts)`，可选 `created` / `idle`；筛选条件一改就重新查询并写进 URL（`kind`、`q`、`project_key`、`status`、`owner_agent`、`source_agent`、`updated_after`、`sort`、`include_archived`），前进后退都保持。
+- 任务页排序默认「最近对话」：有会话或片段时只看对话时间 = `MAX(关联会话最新 updated_at, 片段事件最新 ts)`；两者都没有（手工新建的合并任务）才退回 `task.updated_at`。本体的更新时间会被扫描刷成扫描时间，所以不参与排序，否则等于按扫描时间排。可选 `created`（按创建）/ `idle`（最久没动排在最前）。筛选条件一改就重新查询并写进 URL（`kind`、`q`、`project_key`、`status`、`owner_agent`、`source_agent`、`updated_after`、`sort`、`include_archived`），前进后退都保持。
 - 配置 LLM 后，记忆与任务会在写入/同步后异步生成中文摘要；原文始终保留。列表优先显示摘要并标「AI 摘要」，任务详情同时能看到摘要与原始目标/下一步，失败时自动退回规则字段。
 
 **从 schema_version 1 升级**：`Open` 会自动跑一次迁移（给 `task` 加 `kind`/`session_id` 并建索引），
 把「只关联一场会话且从未手工编辑」的老任务转成对话任务，其余保持合并任务；不删任何数据，重复打开安全。
 
-**简报**固定顺序，内容来自库里的记忆与正式任务：
+**简报**固定顺序，内容来自库里的记忆与任务（优先合并任务）：
 1. 项目概况（project_key、路径、记忆与任务数）
 2. 用户偏好（全局，永不裁剪）
 3. 项目硬约束与约定（永不裁剪）
@@ -327,7 +408,7 @@ SQLite FTS5 默认分词搜不到中文（实测：「用户偏好」里搜「�
 5. 未决问题
 6. 共享记忆入口（CLI 与 MCP 用法提示）
 
-没有正式任务的旧库会回退显示最近任务卡，保证兼容。
+没有合并任务的旧库会回退显示最近任务卡，保证兼容。
 
 预算默认 4000 token。超预算时依次：任务详情降级 → 任务数减少 → 省略任务与未决问题整段；偏好、硬约束、入口提示保留。
 
@@ -346,10 +427,10 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 | 页面 | 地址 | 内容 |
 | --- | --- | --- |
 | 总览 | `/` | 统计、项目索引、用户级记忆与新增 |
-| 项目档案 | `/p/<项目key>` | 概况、项目记忆、用户记忆、正式任务、简报、来源、会话 |
-| 任务 | `/tasks` | 正式任务列表，可切换归档 |
+| 项目档案 | `/p/<项目key>` | 概况、项目记忆、用户记忆、任务（对话 + 合并）、简报、来源、会话 |
+| 任务 | `/tasks` | 对话任务与合并任务，可切换视图、排序与归档 |
 | 任务详情 | `/t/<任务id>` | 编辑目标/状态/owner/下一步/步骤，查看对话片段与来源会话 |
-| 新建任务 | `/t/new` | 选择项目并创建正式任务 |
+| 新建任务 | `/t/new` | 选择项目并创建一条合并任务 |
 | 记忆档案 | `/memories` | 全部记忆，按关键词/范围/项目/类型/过时筛选，可展开更多 |
 | 来源 | `/sources` | 所有记忆文件与会话文件，可只看失败 |
 | 编辑记忆 | `/m/<记忆id>` | 独立编辑页，保存/取消后回到来源页 |
@@ -357,12 +438,12 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 | 设置 | `/settings` | 服务与托盘、LLM 摘要、扫描与简报、数据备份/导出/导入，左侧分区切换 |
 
 - token 会存进 `sessionStorage` 并从地址栏抹掉；同一标签页里点页面链接不需要重复带令牌。直接打开某个地址（没有令牌）会显示「需要访问令牌」。
-- 首页五个数字都可下钻：项目跳到项目索引；记忆/过时进「记忆档案」；源/失败源进「来源」。
+- 首页五个数字都可下钻：项目跳到项目索引；记忆/过时进「记忆档案」；来源进「来源」；任务进「任务」。
 - 项目档案是「左栏目录 + 右栏正文」：左栏是项目名、路径、记忆/任务/来源统计和七个区块的锚点；右栏按 01–07 编号展示，项目记忆与用户级记忆分开。
 - 记忆条目是账本行：左侧细线按类型着色，点整行进独立编辑页；条目正文按 Markdown 渲染并折叠预览，长内容点进编辑页看全文；项目页只展示前 10 条，点「查看全部」进 `/memories?project=...`。
 - 记忆编辑：独立页面，左侧改正文/类型、右侧实时 Markdown 预览；可保存、取消、标过时/恢复；编辑成与已有条目相同的内容会自动合并并提示。来自 Qoder/Trae 文件的记忆提示「源文件变化后编辑可能被覆盖」。保存后回到进入编辑页时的列表/项目页。
-- 任务页 `/tasks`：关键词 + 项目 + 状态 + owner + 来源 + 时间范围筛选，可切换归档；条件写进 URL，刷新/前进后退保持。项目页的任务区只显示当前项目的活动任务。
-- 任务详情 `/t/<id>`：编辑目标、状态、owner、下一步和步骤；查看最近对话片段与来源会话；可归档/恢复、合并重复任务、复制交接 Prompt。
+- 任务页 `/tasks`：**视图**（全部【默认】/ 对话任务 / 合并任务）+ 关键词 + 项目 + 状态 + owner + 来源 + 时间范围 + **排序**（最近对话 / 最近创建 / 最久没动）筛选，可切换显示归档；条件一改就出结果并写进 URL，刷新/前进后退保持，「重置」清空条件。列表标题旁会显示命中条数与当前排序口径。默认「全部」是因为 agent 通过 MCP `task_add` 建的是合并任务，只给对话任务视图会把它们藏起来。项目页的任务区只显示当前项目的活动任务。
+- 任务详情 `/t/<id>`：顶部常驻任务头（目标/状态/owner/下一步，可编辑）+ 四个 tab：**最近对话**（库优先最近 20 条，`加载更早` 按字节窗口回溯源 jsonl，源不可读回退黄条）、**进行中的 task**（进度条 + 步骤列表，稳定 key 可改状态）、**任务文件**（按文件聚合最近时间/次数/来源）、**任务交接**（极简接手版 + 折叠完整版，各带复制）。tab 写进 `?tab=`，刷新与前进后退保持。可归档/恢复、合并重复任务。
 - 任务与交接简报：正文按 Markdown 渲染（标题、列表、表格、代码块）；任务「下一步」过长会折叠，可点「展开全文」。
 - 来源页列出 agent、文件路径、最后扫描时间、大小与失败原因；项目页只列给该项目贡献过记忆的来源。
 - 同步：自动扫描默认开启（serve 启动先扫一次，之后 fsnotify + 30 秒轮询兜底）；顶部「立即同步」手动触发，完成后刷新当前页。MCP 不是同步前置条件，而是 AI 主动读写共享库的通道。
@@ -385,6 +466,8 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 > 看 [docs/client-guide.md](client-guide.md)。本节是要点摘录。
 
 双击 `agent-memory-app.exe`，会打开一个标题为「agent-memory 共享记忆」的窗口，内容与 Web UI 相同。不需要浏览器、不需要记 token、不需要输命令。
+
+本节描述的是 Windows 行为；macOS / Linux 的桌面能力差异见第 2.5 节。
 
 启动时它自己完成这些事：
 
@@ -466,7 +549,8 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 | `handoff_get` | 取项目交接简报 |
 | `task_list` / `task_get` | 任务列表 / 详情（含步骤、片段、来源会话）；`task_list` 可带 `kind=session|formal` |
 | `task_add` | 新建合并任务（`kind=formal`），可带步骤 |
-| `task_update` | 更新目标/状态/下一步/owner/归档，步骤整组替换 |
+| `task_update` | 更新目标/状态/下一步/owner/归档；`step_status`（按 `source_key` 改单步状态，不冻结）；`steps` 整组替换文本（会冻结扫描同步） |
+| `task_sync` | 把指定会话立刻同步成对话任务（不等静默窗口）；`session_id` 可省，缺省取该项目最近修改的会话 |
 | `task_export` | 导出交接 Prompt（带同一个 task_id） |
 | `project_resolve` | 路径 → project_key |
 | `stats` | 库统计 |
@@ -492,8 +576,11 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 | GET | `/v1/handoff` | `?project_path=|project_key=&format=json\|markdown` |
 | POST | `/v1/handoff` | `{project_path, write}` |
 | GET | `/v1/task` | 会话摘要卡：`?project_path=&status=&limit=` |
-| GET | `/v1/tasks` | 任务：`?kind=session\|formal=&project_key=&status=&q=&owner_agent=&source_agent=&updated_after=&updated_before=&include_archived=&sort=created\|idle=&limit=&offset=`（不传 `kind` 返回两类；不传 `sort` 按「最近有内容」） |
+| GET | `/v1/tasks` | 任务：`?kind=session\|formal=&project_key=&status=&q=&owner_agent=&source_agent=&updated_after=&updated_before=&include_archived=&sort=created\|idle=&limit=&offset=`（不传 `kind` 返回两类；不传 `sort` 按「最近对话」） |
 | GET | `/v1/tasks/item` | `?id=`，任务、步骤、片段、来源会话 |
+| GET | `/v1/task/conversation` | `?task_id=&before=&limit=`：`before=0` 返回库里最近片段；`before=文件偏移` 按字节窗口回溯源 jsonl，源不可读回 `source=store_only` |
+| GET | `/v1/task/files` | `?task_id=`，按文件聚合的改动（路径/次数/最近时间/来源 agent） |
+| POST | `/v1/tasks/step/status` | `{task_id, source_key, status}`，写步骤状态覆盖，不冻结扫描 |
 | POST | `/v1/tasks` | `{project_path, goal, status?, next_steps?, owner_agent?, steps?}`，建出的任务 `kind=formal` |
 | POST | `/v1/tasks/update` | `{id, goal?, status?, next_steps?, owner_agent?, archived?, steps?}` |
 | POST | `/v1/tasks/merge` | `{source_id, target_id}` |
@@ -574,6 +661,8 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 - OpenCode 的会话/记忆与 Trae 的云端会话尚未接入
 - `git worktree` / submodule 的 `.git` 是文件，目前读不到 remote，会退化为路径 key
 - 单机单库；多机同步与全文 transcript 检索属于非目标
+- 桌面体验是 Windows 优先：macOS / Linux 上没有 WebView2 窗口、系统托盘、开机自启、快捷方式与单实例保护，LLM 密钥也不再加密存储（见第 2.5 节）。CLI、`serve`、Web UI、HTTP API 与 MCP 三家平台一致
+- Trae 的 `workspaceStorage` 索引按 Windows 的 `%APPDATA%` 推导；macOS / Linux 上需要显式配 `[trae] workspace_roots`，否则项目记忆只能按目录名猜项目，映射不回真实路径
 - LLM 摘要依赖外部 OpenAI 兼容服务；未配置时所有功能照常可用，只是没有「AI 摘要」标记。摘要不替代原文，硬约束/偏好在简报里仍使用原文
 - 导入会按项目 key、记忆归一化文本、任务目标合并；导入前自动备份，但写库过程中若遇到磁盘/SQLite 故障，需用备份手动恢复（接口会返回错误）
 
@@ -582,7 +671,7 @@ http://127.0.0.1:47123/?token=<~/.agent-memory/token 的内容>
 ## 16. 开发与测试
 
 ```bash
-go test ./... -count=1     # 443 个测试函数
+go test ./... -count=1     # 449 个测试函数
 go vet ./...
 go build ./cmd/agent-memory
 ```
@@ -593,7 +682,27 @@ Windows 上仓库配置了 `core.autocrlf=true`，工作区是 CRLF，`gofmt -l 
 git show :internal/store/memory.go | gofmt -d
 ```
 
-数据库 schema 版本记录在 `meta.schema_version`（当前 `1`）。版本高于二进制时会拒绝打开并提示重建，不会静默降级。
+数据库 schema 版本记录在 `meta.schema_version`（当前 `3`）。版本低于二进制时 `Open` 会自动迁移（`1→2` 给 `task` 补 `kind`/`session_id` 并建索引；`2→3` 新增 `task_step_override` 表，只建表不动数据）；高于二进制时拒绝打开并提示升级程序，不会静默降级。
+
+### 交叉编译
+
+驱动是纯 Go 的 `modernc.org/sqlite`，`CGO_ENABLED=0` 即可，无目标机依赖：
+
+```bash
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "-s -w" -o dist/agent-memory-windows-amd64.exe ./cmd/agent-memory
+CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags "-s -w" -o dist/agent-memory-linux-amd64       ./cmd/agent-memory
+CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -ldflags "-s -w" -o dist/agent-memory-linux-arm64       ./cmd/agent-memory
+CGO_ENABLED=0 GOOS=darwin  GOARCH=amd64 go build -ldflags "-s -w" -o dist/agent-memory-darwin-amd64      ./cmd/agent-memory
+CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -ldflags "-s -w" -o dist/agent-memory-darwin-arm64      ./cmd/agent-memory
+```
+
+`internal/desktop` 的 Windows 专属能力（WebView2、托盘、命名互斥量单实例、DPAPI、快捷方式、开机自启、窗口位置记忆）都在 `*_windows.go` 里，`*_other.go` 给出降级实现，所以非 Windows 也能编译并跑 CLI/服务。
+改完 `internal/desktop` 建议顺手交叉验证，静态检查按目标平台跑：
+
+```bash
+GOOS=darwin CGO_ENABLED=0 go vet ./...
+GOOS=linux  CGO_ENABLED=0 go vet ./...
+```
 
 ### 出 Windows 安装包
 

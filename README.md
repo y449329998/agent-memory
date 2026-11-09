@@ -1,178 +1,175 @@
 # agent-memory
 
-让 Qoder、Trae、WorkBuddy、OpenCode 共用一份记忆。切到另一个 agent 时不必从头描述任务。
+让 Qoder、Trae、WorkBuddy、OpenCode、Claude 共用一份记忆。切到另一个 agent 时，不必从头描述任务。
 
-M1 接入 Qoder 的记忆文件；M2 起再导入它的会话历史，提炼任务卡并生成项目交接简报。M3 增加常驻服务 `serve`、stdio 桥 `mcp` 与 `link`，让 Qoder / OpenCode / Claude 通过 MCP 直接读写共享记忆。Trae / WorkBuddy 的记忆文件也已导入；它们的 MCP 配置格式尚未确证，仍只通过项目里的 `HANDOFF.md` 读取。
+![客户端总览页](docs/images/client/01-home-top.webp)
 
-## 桌面应用
+所有数据都在本机：一个 SQLite 库、几个项目内的 `HANDOFF.md`。除了显式执行 `link`，它不写任何 agent 的原生文件。
 
-不想用命令行：构建 `go build -ldflags "-H windowsgui" -o agent-memory-app.exe ./cmd/agent-memory-app`，双击运行即可。它会自动准备配置与数据库、按配置端口（默认 47123）拉起后台服务，并打开一个「agent-memory 共享记忆」窗口（WebView2；缺失时回退 Edge/Chrome 应用窗口）。关掉窗口只是隐藏到系统托盘，后台服务继续运行；再次双击会唤起已有窗口而不是起第二个实例。托盘菜单可立即同步、打开日志、开机自启、停止服务并退出。
+## 3 分钟跑起来
 
-Windows 安装包（NSIS，免管理员权限，装到 `%LOCALAPPDATA%\Programs\agent-memory`，卸载保留数据）：
+### Windows：装桌面应用
 
-```
-powershell -ExecutionPolicy Bypass -File scripts\package.ps1   # 产出 out\agent-memory-setup-x64.exe
-```
+1. 下载 [releases/agent-memory-setup-x64-0.1.0.exe](releases/agent-memory-setup-x64-0.1.0.exe)（校验和见 [releases/SHA256.txt](releases/SHA256.txt)）。免管理员权限，装进 `%LOCALAPPDATA%\Programs\agent-memory`。
+2. 双击桌面图标或开始菜单里的「agent-memory 共享记忆」。它自动建配置和库、拉起后台服务（默认端口 47123）、打开主窗口。
+3. 窗口里点**立即同步**，记忆与会话就进了共享库；总览、项目、记忆、来源、任务、设置各页点着看就行。关窗只是隐藏到托盘，服务继续跑。
+4. 想让 agent 直接读写这份记忆：接驳台页复制配置，或在项目里跑 `agent-memory link qoder --project . --dry-run`（去掉 `--dry-run` 才真写）。
 
-**面向使用者的图解说明**（每个页面逐区标注、设置项含义、数据位置、排错与工作流）见
-[docs/client-guide.md](docs/client-guide.md)。命令、配置、Web UI、HTTP API 与 MCP 接入的完整参考见
-[docs/usage.md](docs/usage.md)。设计文档见 `docs/superpowers/specs/`，实施计划见 `docs/superpowers/plans/`。
+图解说明（每个页面逐区标注、设置项含义、排错与工作流）见 [docs/client-guide.md](docs/client-guide.md)。
 
-## 现在能做什么
+### macOS / Linux：命令行 + 浏览器
 
-- 读取 Qoder 的长期记忆与会话，归并去重进一个共享 SQLite 库，并为项目生成 `.agent-memory/HANDOFF.md`（目标 / 状态 / 改动文件 / 下一步 / 未决问题）
-- 同时导入 Trae 与 WorkBuddy 的记忆：Trae 读用户记忆、`projects/*/project_memory.md` 与 `user_rules/`（项目记忆按 `workspaceStorage` 映射回真实项目），WorkBuddy 读 `MEMORY.md`；三家去重进同一份库，`doctor` 分别给出发现结果
-- `agent-memory serve` 常驻：HTTP 接口 + MCP 端点，同时监听 agent 目录，变化时自动增量扫描并刷新简报
-- `agent-memory mcp` 作为 stdio 桥转发给 serve，agent 侧只看到一种标准的本地 MCP 进程
-- 任务分两类：`kind=session` 对话任务（一次 agent 对话一条，步骤来自该 agent 的 Todo 或从会话整理）与 `kind=formal` 合并任务（跨对话收尾，桌面端或 MCP 显式建/合并）；扫描不再把新会话折叠进同项目的进行中任务
-- MCP 暴露 11 个工具：`memory_search` / `memory_add` / `memory_list` / `handoff_get` / `task_list` / `task_get` / `task_add` / `task_update` / `task_export` / `project_resolve` / `stats`
-- `agent-memory link qoder|opencode|claude` 一键接入（**改配置前先 `--dry-run`**，写前自动备份）
-- 检索用 FTS5 + 自切分中文二元组，两字中文词（如「偏好」「命名」）也能召回
-- 命令行查、写、列、清理；`doctor` 汇总库状态、会话 / 任务卡 / 简报计数、agent 发现结果与写入目标
-
-## MCP 接入
-
-先让 `serve` 常驻。不写 `--port` 时使用配置 `[server] port`（默认 47123）；显式 `--port 0` 才由系统分配随机端口。实际端口写进数据目录下的 `port` 文件：
-
-    ./agent-memory serve                  # 常驻，使用配置端口（默认 47123）
-
-再对 agent 先看计划、确认无误后写入。**`link` 会改 agent 的 MCP 配置文件，必须先跑 `--dry-run` 看它要写哪里**：
-
-    ./agent-memory link qoder --project "$(pwd)" --dry-run
-    ./agent-memory link qoder --project "$(pwd)"
-
-支持的 `agent` 与写入位置：
-
-- `qoder`：`~/.qoder-cn/mcp.json`，项目区块写 `AGENTS.md`
-- `opencode`：`~/.config/opencode/opencode.json`，项目区块写 `AGENTS.md`
-- `claude`：`~/.claude.json`，项目区块写 `CLAUDE.md`
-
-写配置前自动备份为 `<文件>.bak-<时间戳>`；项目内只会改它自己装过的那段带 marker 的区块。用 `agent-memory unlink <agent> --project <路径>` 可撤销。
-
-`link` 在 MCP 配置里启动的是 `agent-memory mcp --port <实际端口>`（stdio 桥）：它把 agent 的每行 JSON-RPC 转发到 `serve` 的 `/mcp`，token 通过环境变量 `AGENT_MEMORY_TOKEN` 传入。运行期文件都在数据目录（默认 `~/.agent-memory/`）：
-
-- `token`：首次 `serve` 时生成（0600），`mcp` 桥与 `link` 都从这里取
-- `port`：`serve` 运行期间存在，其中是实际监听端口；`link` 从它读端口，进程退出时删除
-
-因此 `serve` 若换了端口，需要重新 `link`。MCP 客户端通常要重启才会加载新配置。
-
-Trae 与 WorkBuddy 的 MCP 配置格式未确证，`link` 拒绝写入；它们照常通过项目里的 `.agent-memory/HANDOFF.md` 读到共享记忆。
-
-## Web UI
-
-`serve` 自带本地 Web UI（多页面：总览、项目档案、记忆档案、来源、任务列表与任务详情、MCP 接驳台、设置中心），不需要额外安装：
-
-```
-http://127.0.0.1:<端口>/?token=<~/.agent-memory/token 里的值>
+```bash
+CGO_ENABLED=0 go build -o agent-memory ./cmd/agent-memory  # 无 cgo，SQLite 驱动是纯 Go
+./agent-memory init                                       # 写 ~/.agent-memory/config.toml 并建库
+./agent-memory scan                                       # 导入记忆与会话，刷新各项目简报
+./agent-memory serve &                                    # 常驻：HTTP + MCP + 目录监听
+open "http://127.0.0.1:47123/?token=$(cat ~/.agent-memory/token)"   # Linux 用 xdg-open
 ```
 
-打开后 token 会存进 `sessionStorage` 并从地址栏抹掉。页面提供：
+打开页面后 token 会存进 `sessionStorage` 并从地址栏抹掉。之后不用重复手动 `scan`——`serve` 监听 agent 目录，变化时自动增量扫描并刷新简报。
+接入 agent 与 Windows 相同：`./agent-memory link qoder --project "$PWD" --dry-run`。
 
-- 概览（项目/记忆/过时/来源/失败源，数字可点下钻）与健康状态、深浅色主题
-- 搜索记忆（中文两字词可命中，可按类型、范围、项目过滤，可勾选包含过时）
-- 记忆管理：新增（用户级/项目级）、Markdown 编辑与实时预览、标过时、复活
-- 正式任务：目标 / 状态 / owner / 下一步 / 步骤 / 片段证据，可按关键词、项目、状态、owner、来源、更新时间筛选，支持归档、合并、复制交接 Prompt
-- 交接简报：预览与「写入 HANDOFF.md」
-- MCP 接驳台：按客户端生成实时端口/令牌/启动路径的配置片段，一键复制
-- 设置中心：服务端口（改动自动重写已登记客户端配置）、MCP 启动程序路径、开机自启、关窗驻留、扫描间隔与简报预算、来源开关、可选 LLM 异步摘要、数据备份/导出/导入
-- 一键触发 `scan`
+## 该用哪个入口
 
-页面没有任何外部依赖（无 CDN、无字体库），所有动态内容用 `textContent` 插入；写接口除 Bearer 外还校验 `Origin` 必须是本机同端口。
+| 场景 | 用法 |
+| --- | --- |
+| 只想有个能点的界面 | Windows 桌面应用；macOS / Linux 用 `serve` + 浏览器 |
+| 让 agent 自动读共享记忆 | 项目内 `.agent-memory/HANDOFF.md`（所有 agent 都会读它） |
+| 让 agent 读写、检索、建任务 | `link` 装 MCP（Qoder / OpenCode / Claude） |
+| 脚本化、批量、调试 | 命令行 `scan` / `memory` / `handoff` / `doctor` / `stats` |
 
-## 安装
+Trae 与 WorkBuddy 的 MCP 配置格式未确证，`link` 拒绝写入；它们照常通过 `HANDOFF.md` 读到共享记忆。
 
-    go build ./cmd/agent-memory
-    ./agent-memory init
+## 文档地图
 
-`init` 写 `~/.agent-memory/config.toml` 并建库。要换数据目录用 `init --data-dir <目录>`；**配置已存在时 `--data-dir` 会被忽略并给出提示，必须再加 `--force` 才会改写配置**（否则配置与实际库会不一致）。
+| 想知道 | 看哪里 |
+| --- | --- |
+| 客户端每个页面怎么用 | [docs/client-guide.md](docs/client-guide.md)（图解，21 张标注截图） |
+| 命令、配置项、Web UI、HTTP API、MCP 全参考 | [docs/usage.md](docs/usage.md) |
+| 下载安装包、校验、从源码打包 | [releases/README.md](releases/README.md) |
+| 为什么这么设计 | `docs/superpowers/specs/` |
+| 怎么一步步实现的 | `docs/superpowers/plans/` |
 
-## 用法
+## 它怎么工作
 
-    agent-memory scan                        # 导入记忆与会话，并刷新简报；重复执行幂等（第二次由 unchanged / sessions_unchanged 计数体现）
-    agent-memory scan --agent qoder          # 只扫指定 agent，未知名字退出码 2
-    agent-memory scan --full                 # 忽略内容哈希全量重解析，用于修好解析失败的源
+- **收**：读取 Qoder 的长期记忆与会话、Trae 的用户记忆与 `project_memory.md` / `user_rules/`、WorkBuddy 的 `MEMORY.md`，归一化后按内容哈希去重，进同一份 SQLite 库。
+- **理**：一次 agent 对话 = 一条**对话任务**（`kind=session`），步骤取自那个 agent 的 Todo，没有就从会话记录整理；跨对话收尾时手动**合并**成一条**合并任务**（`kind=formal`）。冲突的记忆并存，不自动裁决。
+- **给**：给每个项目生成 `.agent-memory/HANDOFF.md`（项目概况 / 用户偏好 / 硬约束与约定 / 最近任务 / 未决问题 / 共享记忆入口），并让 agent 通过 MCP 检索与写回。
+- 检索用 FTS5 + 自切分中文二元组，两字中文词（如「偏好」「命名」）也能命中。
 
-    agent-memory handoff --project F:/go-hiprint          # 写 <项目>/.agent-memory/HANDOFF.md
-    agent-memory handoff --project F:/go-hiprint --print  # 只打印到标准输出，不写项目文件
-    agent-memory handoff --project F:/go-hiprint --print --budget 4096  # 临时放宽简报预算
+### 核心概念
 
-    agent-memory memory search 偏好           # 中文检索，默认 limit 20
-    agent-memory memory search 命名 --limit 5 # flag 可以写在关键词后面
-    agent-memory memory search 部署 --project F:/go/agent-memory   # 叠加该项目记忆（用户级始终参与）
-    agent-memory memory search 部署 --type convention --include-stale
+- **记忆**：`scope` = `user`（跨项目）/ `project`；`type` = `preference` `constraint` `convention` `lesson` `fact` `goal`。
+- **任务排序**：默认按**最近对话**——关联会话的最新时间（合并任务再算上对话片段的事件时间）。任务本体的更新时间会被扫描刷成扫描时间，所以不参与排序。另有「最近创建」「最久没动」。
+- **简报预算**：默认 4000 token，超了依次压任务细节、减卡片数；用户偏好与项目硬约束不砍。
+- **幂等**：`scan` 重复跑只处理内容变化过的源；`handoff` 内容相同则报「未变化」，不碰文件。
 
-    agent-memory memory add "提交前先跑 go test" --type convention
-    agent-memory memory add "..." --scope project --project F:/go/agent-memory
+## 常用命令
 
-    agent-memory memory list                  # 默认只列用户级
-    agent-memory memory list --project F:/go/agent-memory   # 路径或 project key；此时列出该项目级 + 用户级
-    agent-memory memory list --include-stale  # 带上已过时条目
+```bash
+agent-memory scan [--agent qoder] [--full]        # 导入；--full 忽略哈希全量重解析
+agent-memory handoff --project . [--print]        # 生成简报；--print 只打印不落盘
+agent-memory memory search 偏好 [--limit 5]       # 中文检索
+agent-memory memory add "提交前先跑 go test" --type convention
+agent-memory doctor [--since 24h]                 # 库状态、计数、agent 发现结果、写入目标清单
+agent-memory serve [--port 47123] [--no-watch]    # 常驻服务；--port 0 由系统分配
+agent-memory link <agent> --project <路径> [--dry-run]
+agent-memory stats [--json]
+```
 
-    agent-memory memory purge                 # 不加 --yes 只报过时条数
-    agent-memory memory purge --yes           # 真删
+退出码：`0` 成功，`1` 运行错误，`2` 用法错误。位置参数以 `-` 开头时，前面单独写 `--`。
+完整参数、配置文件的每个键、HTTP 接口与 MCP 工具入参见 [docs/usage.md](docs/usage.md)。
 
-    agent-memory doctor                       # 库状态、会话/任务卡/简报计数、写入目标清单、agent 发现结果、未合并项目
-    agent-memory doctor --since 24h           # 列出 24h 内变更过的源文件（默认 720h）
+## MCP 接入要点
 
-    agent-memory serve                        # 常驻服务；默认使用 [server] port（47123），实际端口写进 ~/.agent-memory/port
-    agent-memory serve --no-watch             # 只服务不扫描（调试）
-    agent-memory mcp                          # stdio 桥，agent 的 MCP 配置用它；一般由 link 生成，不必手写
-    agent-memory link qoder --project "$(pwd)" --dry-run   # 先看计划：会改哪个配置、装哪段区块
-    agent-memory link qoder --project "$(pwd)"             # 真正写入（写前自动备份），支持 qoder/opencode/claude
-    agent-memory unlink qoder --project "$(pwd)"           # 撤销 link 写入的 MCP 条目与区块
-    agent-memory stats [--json]               # 库统计
+MCP 暴露 12 个工具：`memory_search` / `memory_add` / `memory_list` / `handoff_get` / `task_list` / `task_get` / `task_add` / `task_update` / `task_sync` / `task_export` / `project_resolve` / `stats`。
 
-记忆类型：`preference` `constraint` `convention` `lesson` `fact` `goal`。
-`memory add` 默认 `--type fact`、`--scope user`、`--agent cli`；`--scope project` 必须同时给 `--project <绝对路径>`。该路径若已由 `scan` 登记过就复用那个项目（项目 key 可能是 git remote，不一定是路径），否则新建一个按路径识别的项目。
+`link` 在 agent 的 MCP 配置里启动的是 `agent-memory mcp --port <实际端口>`——一个 stdio 桥，把每行 JSON-RPC 转发给 `serve` 的 `/mcp`，token 通过环境变量 `AGENT_MEMORY_TOKEN` 传入。写入位置：
 
-### 交接简报
+| agent | MCP 配置 | 项目区块 |
+| --- | --- | --- |
+| `qoder` | `~/.qoder-cn/mcp.json` | `AGENTS.md` |
+| `opencode` | `~/.config/opencode/opencode.json` | `AGENTS.md` |
+| `claude` | `~/.claude.json` | `CLAUDE.md` |
 
-`handoff` 的正文分六节：项目概况、用户偏好、项目硬约束与约定、最近任务、未决问题、共享记忆入口。写盘时用临时文件 + rename 原子替换；内容完全相同则报「未变化」，不碰文件。`.agent-memory/` 会加进 `.git/info/exclude`（只影响本机，不改 `.gitignore`）。
+**`link` 会改 agent 的配置，务必先 `--dry-run`。** 写前自动备份为 `<文件>.bak-<时间戳>`，项目内只改它自己装过的那段带 marker 的区块，`unlink` 可撤销。改了服务端口需要重新 `link`；MCP 客户端通常要重启才加载新配置。
 
-默认预算 4000 token（真实项目六节齐全约 3.5k）；超预算时依次压缩任务卡细节、减少卡片数量、省略任务卡与未决问题，用户偏好与项目硬约束不砍。真实数据条目更多时用 `--budget` 或配置里的 `[handoff] budget_tokens` 放宽。
+## 平台差异
 
-### `--` 的用法
+Windows 是主力平台，桌面应用带原生窗口、托盘与自启。macOS / Linux 上同一份代码能编译运行，但界面交给浏览器：
 
-位置参数以 `-` 开头时（例如以负号开头的文本），在它前面单独写 `--`，之后的所有内容都按文本处理，不再当 flag 解析：
+| 能力 | Windows | macOS / Linux |
+| --- | --- | --- |
+| `serve` / `mcp` / `link` / CLI | ✅ | ✅ |
+| Web UI（浏览器打开） | ✅ | ✅ |
+| 桌面窗口 | WebView2 | 回退 Edge / Chrome / Chromium 的 `--app` 窗口 |
+| 系统托盘、关窗驻留 | ✅ | ❌ 窗口关掉即退出桌面进程（后台 `serve` 仍在跑） |
+| 开机自启、开始菜单快捷方式 | ✅ | ❌ 自己写 systemd user unit / LaunchAgent |
+| 单实例保护 | 命名互斥量 | ❌ 别重复启动 |
+| LLM 密钥存 DPAPI | ✅ | 明文写进配置，注意文件权限 |
 
-    agent-memory memory add -- "-5% 阈值不触发告警"
-    agent-memory memory search -- "-5%"
+macOS / Linux 想常驻，建议交给服务管理器。Linux systemd user unit：
 
-### 输出与退出码
+```ini
+# ~/.config/systemd/user/agent-memory.service
+[Unit]
+Description=agent-memory shared memory service
 
-`memory search` 每条命中依次打印：分数 + `[scope/type]` + 正文、`来源 <agent>: <文件路径>`（可能多行）、`最后见到 <RFC3339 时间>`。分数是 SQLite `bm25()` 的原始值，越负越相关（输出已按相关性升序）。
+[Service]
+ExecStart=%h/.local/bin/agent-memory serve
 
-退出码：`0` 成功；`1` 运行错误（库打不开、`unknown project` 等）；`2` 用法错误（未知子命令/flag、缺参数、非法类型）。
+[Install]
+WantedBy=default.target
+```
 
-## 只读边界与写入点
+```bash
+systemctl --user daemon-reload && systemctl --user enable --now agent-memory
+loginctl enable-linger "$USER"          # 未登录也常驻
+```
 
-导入记忆与会话的过程只对 agent 目录做 `os.ReadDir` / `os.ReadFile` / `os.Stat`，不写、不改、不删、也不在 `~/.qoder-cn` 下创建任何文件。
+macOS 用 LaunchAgent：`~/Library/LaunchAgents/com.agent-memory.serve.plist`，`ProgramArguments` 指向 `agent-memory serve`，`RunAtLoad` 与 `KeepAlive` 设 `true`。只想临时跑一次：`nohup agent-memory serve >~/.agent-memory/serve.log 2>&1 &`。
 
-M2/M3 的写入点：项目内 `.agent-memory/HANDOFF.md` 与 `.git/info/exclude` 的一行 `/.agent-memory/`；数据目录下的 `memory.db` 以及运行期文件 `token`、`port`（`serve` 首次启动生成；`port` 在进程退出时删除）；只有显式执行 `link` 时才会改 agent 的 MCP 配置与项目内 `AGENTS.md`（Claude 为 `CLAUDE.md`）的受管区块，且写前备份、可用 `unlink` 撤销。`scan` 只为「有项目级记忆或任务卡、且目录仍存在」的项目刷新简报，显式 `handoff --print` 不写任何项目文件。除此之外不碰任何被 git 跟踪的文件。
+Windows 桌面应用会自己拉起 `serve`；macOS / Linux 请自己常驻 `serve`，其余功能完全一致。
 
-`doctor` 会打印完整的写入目标清单，形如：
+## 构建
 
-    写入目标（本程序只会改这几处）:
-      <数据目录>                       # 配置里的 data_dir，默认 ~/.agent-memory
-      <数据目录>/memory.db             # 共享记忆库
-      项目内 .agent-memory/ 与 link 装过的区块（M2/M3 起）
+需要 Go 1.26+（`go.mod` 声明 `go 1.26.0`），无其他构建依赖。
 
-实际写入点就是上面列出的这些：数据目录与其中的 `token` / `port`、项目内 `.agent-memory/HANDOFF.md` 与 git exclude、以及 `link` 显式执行时的 agent MCP 配置和项目区块。
+```bash
+go build -o agent-memory ./cmd/agent-memory                     # CLI + 服务 + Web UI + MCP 桥
+go build -ldflags "-H windowsgui" -o agent-memory-app.exe \
+    ./cmd/agent-memory-app                                      # Windows 桌面应用（不弹控制台）
+go test ./... && go vet ./...
+```
 
-验收方法：`scan` / `handoff` 前后对原生 `*.md` 与 `*.jsonl` 做 md5 对比，无差异即证明未改动；再结合上面这份封闭的写入目标清单，共同说明「没被改」且「无处可改」。注意正在运行的 agent 自己会持续写当前会话的 jsonl，验收窗口内这类活跃会话文件可能变化，需单独核对。
+SQLite 驱动是纯 Go 的 `modernc.org/sqlite`，没有 cgo 依赖，交叉编译只要 `CGO_ENABLED=0`：
 
-## 它不会做什么
+```bash
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "-s -w" -o dist/agent-memory-windows-amd64.exe ./cmd/agent-memory
+CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags "-s -w" -o dist/agent-memory-linux-amd64       ./cmd/agent-memory
+CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -ldflags "-s -w" -o dist/agent-memory-linux-arm64       ./cmd/agent-memory
+CGO_ENABLED=0 GOOS=darwin  GOARCH=amd64 go build -ldflags "-s -w" -o dist/agent-memory-darwin-amd64      ./cmd/agent-memory
+CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -ldflags "-s -w" -o dist/agent-memory-darwin-arm64      ./cmd/agent-memory
+```
 
-- 不修改任何 agent 的原生记忆文件或会话文件
-- 不保存完整对话原文：会话只保留裁剪后的事件（单条最多 500 字符）与提炼出的任务卡
-- 不自动裁决互相冲突的记忆（冲突条目并存，用检索分数与来源区分）
-- 不把业务内容写进被 git 跟踪的文件：只写 `.agent-memory/`（已加进 `.git/info/exclude`）；`link` 只装一小段带 marker 的指针区块（`AGENTS.md` / `CLAUDE.md`），可用 `unlink` 移除，不改业务代码与 `.gitignore`
-- 不自动给 Trae / WorkBuddy 写 MCP 配置：它们的格式未确证，`link` 拒绝写入
+Windows 安装包（需 NSIS 3，免管理员权限，卸载保留数据）：
 
-## 数据位置
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\package.ps1     # 产出 out\agent-memory-setup-x64.exe
+```
 
-- 配置：`~/.agent-memory/config.toml`（`[handoff]` 段可调 `budget_tokens` / `recent_cards` / `settle_idle`）
+## 数据位置与写入边界
+
+- 配置：`~/.agent-memory/config.toml`（Windows 为 `%USERPROFILE%\.agent-memory\`）
 - 记忆库：`~/.agent-memory/memory.db`
-- 运行期文件：`~/.agent-memory/token`（首次 `serve` 生成，0600）、`~/.agent-memory/port`（`serve` 运行期间存在）
-- 项目简报：`<项目>/.agent-memory/HANDOFF.md`
-- 检索：FTS5 + 自切分中文二元组；`trigram` 对两字中文词召回为 0，所以没用
+- 运行期：`token`（首次 `serve` 生成，0600）、`port`（`serve` 运行期间存在，退出时删除）
+- 项目简报：`<项目>/.agent-memory/HANDOFF.md`，同时把 `/.agent-memory/` 加进 `.git/info/exclude`（只影响本机，不改 `.gitignore`）
+
+读取 agent 目录只做 `ReadDir` / `ReadFile` / `Stat`。全部写入点就这几处：数据目录、项目内 `.agent-memory/`、`link` 显式执行时的 MCP 配置与项目区块（写前备份）。会话不留完整对话原文，只保存裁剪后的事件（单条最多 500 字符）与提炼出的任务。`doctor` 会打印这份封闭的写入目标清单。
+
+## 仓库与许可
+
+- Gitee：<https://gitee.com/muyi99/agent-memory>
+- GitHub：<https://github.com/y449329998/agent-memory>
+- v0.1.0，MIT，见 [LICENSE](LICENSE)
