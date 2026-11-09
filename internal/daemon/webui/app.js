@@ -1323,6 +1323,13 @@
     });
     statusSel.value = 'doing';
 
+    function paintProgress() {
+      const box = $('step-progress');
+      if (!box) return;
+      const done = rows.filter(function (r) { return r.status.value === 'done' || r.status.value === 'skipped'; }).length;
+      box.textContent = '进度 ' + done + '/' + rows.length;
+    }
+    function stableKey(k) { return !/^(cmd|err|next|file):/.test(k); }
     function addStep(step) {
       const row = el('div', 'step-row');
       const status = el('select');
@@ -1338,11 +1345,25 @@
       const remove = el('button', 'step-remove', '×');
       remove.type = 'button';
       remove.title = '删除步骤';
-      const entry = { row: row, status: status, subject: subject };
-      remove.addEventListener('click', function () { row.remove(); const i = rows.indexOf(entry); if (i >= 0) rows.splice(i, 1); });
+      const entry = { row: row, status: status, subject: subject, sourceKey: step.SourceKey || step.source_key || '' };
+      remove.addEventListener('click', function () {
+        row.remove();
+        const i = rows.indexOf(entry);
+        if (i >= 0) rows.splice(i, 1);
+        paintProgress();
+      });
+      status.addEventListener('change', async function () {
+        if (!isNew && entry.sourceKey && stableKey(entry.sourceKey)) {
+          try {
+            await api('/v1/tasks/step/status', { method: 'POST', body: JSON.stringify({ task_id: Number(id), source_key: entry.sourceKey, status: status.value }) });
+          } catch (e) { toast('error', '状态保存失败：' + e.message); }
+        }
+        paintProgress();
+      });
       rows.push(entry);
       row.appendChild(status); row.appendChild(subject); row.appendChild(remove);
       stepsBox.appendChild(row);
+      paintProgress();
     }
     function readSteps() {
       return rows.filter(function (r) { return r.subject.value.trim() !== ''; }).map(function (r) {
@@ -1356,6 +1377,104 @@
     $('task-next').addEventListener('input', renderNextPreview);
 
     $('task-add-step').addEventListener('click', function () { addStep({ Status: 'pending' }); });
+
+    let convNext = 0, convSize = 0;
+    async function loadConversation(reset) {
+      const box = $('snippet-list');
+      if (!box) return;
+      if (reset) { clear(box); convNext = 0; }
+      try {
+        const d = await api('/v1/task/conversation?task_id=' + enc(id) + '&before=' + convNext + '&limit=20');
+        if (d.warning) { $('conv-warn').hidden = false; $('conv-warn').textContent = d.warning; }
+        else { $('conv-warn').hidden = true; }
+        convSize = d.file_size || convSize;
+        const frag = document.createDocumentFragment();
+        (d.messages || []).forEach(function (m) {
+          const wrap = el('div', 'snippet');
+          wrap.appendChild(el('div', 'meta', (m.Role || m.role || '') + ' · ' + fmtTime(m.Ts || m.ts)));
+          const body = el('div', 'md');
+          renderMd(body, m.Text || m.text || ('[' + (m.Tool || m.tool || '') + ']'));
+          if (m.Truncated || m.truncated) body.appendChild(el('span', 'meta', ' …源文件里更长'));
+          wrap.appendChild(body);
+          frag.appendChild(wrap);
+        });
+        if (reset || convNext === 0) box.appendChild(frag); else box.insertBefore(frag, box.firstChild);
+        convNext = (d.source === 'store') ? convSize : (d.next || 0);
+        $('conv-more').hidden = !((d.source === 'file' && d.next > 0) || (d.source === 'store' && convSize > 0));
+        if (!(d.messages || []).length && reset) box.appendChild(el('p', 'empty', '还没有对话片段。'));
+      } catch (e) { box.appendChild(el('p', 'empty', '对话加载失败：' + e.message)); }
+    }
+    async function loadFiles() {
+      const box = $('file-list');
+      if (!box) return;
+      clear(box);
+      try {
+        const d = await api('/v1/task/files?task_id=' + enc(id));
+        (d.files || []).forEach(function (f) {
+          const row = el('div', 'src-row');
+          row.appendChild(el('span', 'path', f.path));
+          row.appendChild(el('span', 'when', fmtTime(f.last_ts) + ' · ' + f.count + ' 次 · ' + (f.agent || '')));
+          box.appendChild(row);
+        });
+        if (!(d.files || []).length) box.appendChild(el('p', 'empty', '这场对话没有文件改动'));
+        $('files-copy').onclick = function () {
+          navigator.clipboard.writeText((d.files || []).map(function (f) { return f.path; }).join('\n'));
+          toast('info', '已复制全部路径');
+        };
+      } catch (e) { box.appendChild(el('p', 'empty', '文件加载失败：' + e.message)); }
+    }
+    async function copyText(md) {
+      try {
+        await navigator.clipboard.writeText(md);
+        toast('info', '已复制，粘给下一个 agent 即可');
+      } catch (e) { window.prompt('复制失败，请手动复制', md); }
+    }
+    async function loadHandoff() {
+      try {
+        const brief = await api('/v1/tasks/export?id=' + enc(id) + '&mode=brief');
+        renderMd($('handoff-brief'), brief.markdown || '');
+        $('handoff-copy-brief').onclick = function () { copyText(brief.markdown || ''); };
+        const full = await api('/v1/tasks/export?id=' + enc(id));
+        renderMd($('handoff-full'), full.markdown || '');
+        $('handoff-copy-full').onclick = function () { copyText(full.markdown || ''); };
+      } catch (e) { renderMd($('handoff-brief'), '交接加载失败：' + e.message); }
+    }
+    function showTab(name) {
+      [].slice.call(document.querySelectorAll('#task-tabs .tab')).forEach(function (t) {
+        t.classList.toggle('active', t.dataset.tab === name);
+      });
+      ['conversation', 'steps', 'files', 'handoff'].forEach(function (p) {
+        const node = $('pane-' + p);
+        if (node) node.hidden = p !== name;
+      });
+      if (isNew) return;
+      const u = new URL(location.href);
+      u.searchParams.set('tab', name);
+      history.replaceState(null, '', u);
+      if (name === 'files') loadFiles();
+      if (name === 'handoff') loadHandoff();
+    }
+    function initTabs() {
+      const bar = $('task-tabs');
+      if (!bar) return;
+      if (isNew) { bar.hidden = true; showTab('steps'); return; }
+      [].slice.call(bar.querySelectorAll('.tab')).forEach(function (t) {
+        t.addEventListener('click', function () { showTab(t.dataset.tab); });
+      });
+      const want = new URLSearchParams(location.search).get('tab') || 'conversation';
+      showTab(['conversation', 'steps', 'files', 'handoff'].indexOf(want) >= 0 ? want : 'conversation');
+    }
+    $('conv-more').addEventListener('click', function () { loadConversation(false); });
+    $('task-save-steps').addEventListener('click', function () {
+      if (isNew) return;
+      if (!window.confirm('保存步骤后，这条任务将不再由扫描自动同步。继续？')) return;
+      const btn = this;
+      busy(btn, '保存', async function () {
+        await api('/v1/tasks/update', { method: 'POST', body: JSON.stringify({ id: Number(id), steps: readSteps() }) });
+        toast('info', '步骤已保存');
+        location.reload();
+      });
+    });
 
     async function load() {
       if (isNew) { addStep({ Status: 'pending' }); renderNextPreview(); return; }
@@ -1375,17 +1494,7 @@
       $('task-meta').textContent = kindName + ' · 来源 ' + (d.SourceAgent || '手动') + ' · 最近更新 ' + fmtTime(d.UpdatedAt) + (isRealTime(d.ArchivedAt) ? ' · 已归档' : '') + kindNote;
       paintSummary('task-ai-summary', 'task-ai-summary-text', d);
       $('task-archive').textContent = isRealTime(d.ArchivedAt) ? '恢复' : '归档';
-      const snippetBox = $('snippet-list');
-      clear(snippetBox);
-      (d.Snippets || []).forEach(function (s) {
-        const wrap = el('div', 'snippet');
-        wrap.appendChild(el('div', 'meta', s.Role + ' · ' + fmtTime(s.Ts)));
-        const body = el('div', 'md');
-        renderMd(body, s.Text || '');
-        wrap.appendChild(body);
-        snippetBox.appendChild(wrap);
-      });
-      if (!(d.Snippets || []).length) snippetBox.appendChild(el('p', 'empty', '还没有对话片段。'));
+      paintProgress();
       const sessionBox = $('session-list');
       clear(sessionBox);
       (d.Sessions || []).forEach(function (s) {
@@ -1396,6 +1505,7 @@
         sessionBox.appendChild(li);
       });
       if (!(d.Sessions || []).length) sessionBox.appendChild(el('li', 'empty', '没有关联会话。'));
+      loadConversation(true);
     }
 
     form.addEventListener('submit', function (e) {
@@ -1406,12 +1516,12 @@
           goal: $('task-goal').value.trim(),
           status: statusSel.value,
           owner_agent: $('task-owner').value.trim(),
-          next_steps: $('task-next').value,
-          steps: readSteps()
+          next_steps: $('task-next').value
         };
         if (!payload.goal) { toast('error', '请先写目标'); return; }
         if (isNew) {
           payload.project_path = $('task-project').value.trim();
+          payload.steps = readSteps();
           if (!payload.project_path) { toast('error', '请填写项目路径'); return; }
           const d = await api('/v1/tasks', { method: 'POST', body: JSON.stringify(payload) });
           location.href = '/t/' + d.id;
@@ -1462,6 +1572,7 @@
       });
     });
 
+    initTabs();
     load().catch(function (e) { toast('error', '任务加载失败：' + e.message); });
   }
 

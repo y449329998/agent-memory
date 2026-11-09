@@ -7,33 +7,65 @@
     <span class="stamp tiny ai-badge">AI 摘要</span>
     <div id="task-ai-summary-text" class="md"></div>
   </section>
-  <form id="task-form" class="stack">
+
+  <form id="task-form" class="stack task-head">
     <label class="field" id="task-project-field"><span class="label">项目路径</span><input id="task-project" type="text" placeholder="例如 F:\go\demo"></label>
     <label class="field"><span class="label">目标</span><textarea id="task-goal" rows="2" required></textarea></label>
     <div class="row">
       <label class="field inline"><span class="label">状态</span><select id="task-status"></select></label>
       <label class="field inline"><span class="label">owner</span><input id="task-owner" type="text" placeholder="例如 qoder / claude"></label>
     </div>
-    <label class="field"><span class="label">下一步</span><textarea id="task-next" rows="3"></textarea></label>
-    <div class="field"><span class="label">下一步预览</span><div id="task-next-preview" class="md preview-pane task-next-preview"></div></div>
-    <div class="field"><span class="label">步骤</span><div id="task-steps" class="step-list"></div>
-      <button id="task-add-step" class="stamp small ghost" type="button">添加步骤</button></div>
+    <label class="field"><span class="label">下一步</span><textarea id="task-next" rows="2"></textarea></label>
+    <div class="field" hidden><span class="label">下一步预览</span><div id="task-next-preview" class="md preview-pane task-next-preview"></div></div>
     <p id="task-meta" class="meta"></p>
     <div class="actions">
       <button class="stamp primary" type="submit">保存</button>
       <button id="task-archive" class="stamp ghost" type="button">归档</button>
       <button id="task-merge" class="stamp ghost" type="button">合并到…</button>
-      <button id="task-copy" class="stamp ghost" type="button">复制交接 Prompt</button>
+      <button id="task-copy" class="stamp ghost" type="button">复制完整交接</button>
       <a class="stamp ghost" href="/tasks">返回</a>
     </div>
   </form>
-  <section class="section" id="task-snippets">
-    <div class="section-head"><h2>最近对话</h2></div>
+
+  <nav class="tab-bar" id="task-tabs" role="tablist" aria-label="任务详情分区">
+    <button data-tab="conversation" class="tab active" type="button">最近对话</button>
+    <button data-tab="steps" class="tab" type="button">进行中的 task</button>
+    <button data-tab="files" class="tab" type="button">任务文件</button>
+    <button data-tab="handoff" class="tab" type="button">任务交接</button>
+  </nav>
+
+  <section class="tab-pane" id="pane-conversation">
+    <div id="conv-warn" class="warn" hidden></div>
     <div id="snippet-list" class="md"></div>
+    <div class="actions"><button id="conv-more" class="stamp small ghost" type="button">加载更早</button></div>
+    <section class="section">
+      <div class="section-head"><h2>来源会话</h2></div>
+      <ul id="session-list" class="sources"></ul>
+    </section>
   </section>
-  <section class="section" id="task-sessions">
-    <div class="section-head"><h2>来源会话</h2></div>
-    <ul id="session-list" class="sources"></ul>
+
+  <section class="tab-pane" id="pane-steps" hidden>
+    <div id="step-progress" class="meta"></div>
+    <div id="task-steps" class="step-list"></div>
+    <div class="actions">
+      <button id="task-add-step" class="stamp small ghost" type="button">添加步骤</button>
+      <button id="task-save-steps" class="stamp small" type="button">保存步骤（接管同步）</button>
+    </div>
+  </section>
+
+  <section class="tab-pane" id="pane-files" hidden>
+    <div class="actions"><button id="files-copy" class="stamp small ghost" type="button">复制全部路径</button></div>
+    <div id="file-list"></div>
+  </section>
+
+  <section class="tab-pane" id="pane-handoff" hidden>
+    <div class="actions"><button id="handoff-copy-brief" class="stamp small" type="button">复制接手 Prompt</button></div>
+    <div id="handoff-brief" class="md preview-pane"></div>
+    <details class="handoff-full">
+      <summary>完整版（命令 / 报错 / 片段）</summary>
+      <div class="actions"><button id="handoff-copy-full" class="stamp small ghost" type="button">复制完整版</button></div>
+      <div id="handoff-full" class="md preview-pane"></div>
+    </details>
   </section>
 </article>
 {{end}}
