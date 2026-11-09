@@ -1422,9 +1422,11 @@
       try {
         const d = await api('/v1/task/files?task_id=' + enc(id));
         (d.files || []).forEach(function (f) {
-          const row = el('div', 'src-row');
-          row.appendChild(el('span', 'path', f.path));
-          row.appendChild(el('span', 'when', fmtTime(f.last_ts) + ' · ' + f.count + ' 次 · ' + (f.agent || '')));
+          const row = el('div', 'file-row');
+          const path = el('div', 'path', f.path);
+          path.title = f.path;
+          row.appendChild(path);
+          row.appendChild(el('div', 'meta', fmtTime(f.last_ts) + ' · ' + f.count + ' 次 · ' + (f.agent || '')));
           box.appendChild(row);
         });
         if (!(d.files || []).length) box.appendChild(el('p', 'empty', '这场对话没有文件改动'));

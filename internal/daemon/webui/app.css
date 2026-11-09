@@ -1496,3 +1496,7 @@ html[data-theme="light"] .select-trigger { background-image: url("data:image/svg
 #step-progress { margin-bottom: 8px; }
 .handoff-full { margin-top: 16px; }
 .handoff-full summary { cursor: pointer; color: var(--muted, #9aa7b4); }
+.file-row { padding: 10px 2px; border-bottom: 1px solid var(--line, #2a3441); }
+.file-row .path { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 13px; overflow-wrap: anywhere; }
+.file-row .meta { color: var(--muted, #9aa7b4); font-size: 12px; margin-top: 4px; }
