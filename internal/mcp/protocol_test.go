@@ -183,6 +183,12 @@ func (a stubAPI) UpdateTask(ctx context.Context, in UpdateTaskInput) (any, error
 func (a stubAPI) SyncTask(ctx context.Context, in SyncTaskInput) (any, error) {
 	return map[string]any{"task_id": 1, "settled": false}, nil
 }
+func (a stubAPI) ConversationSearch(ctx context.Context, in ConversationSearchInput) (any, error) {
+	return map[string]any{"hits": nil}, nil
+}
+func (a stubAPI) ConversationGet(ctx context.Context, in ConversationGetInput) (any, error) {
+	return map[string]any{"messages": nil, "next": 0}, nil
+}
 func (a stubAPI) ExportTask(ctx context.Context, id int64) (any, error) {
 	return map[string]any{"markdown": "task_id: 1"}, nil
 }

@@ -9,11 +9,12 @@ import (
 	"github.com/muyi99/agent-memory/internal/tailreader"
 )
 
-// handleTaskConversation 对话区数据源：库优先，回溯按字节窗口读源 jsonl。
-// before=0 返回库里最近片段；before>0 从源文件回溯；源不可读回退 store_only。
+// handleTaskConversation 对话区数据源：完整对话表优先，回溯按 seq 游标；
+// 旧库还没有消息时回退 tailreader 读源 jsonl。
 func (s *Server) handleTaskConversation(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.URL.Query().Get("task_id"), 10, 64)
 	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
+	beforeSeq, _ := strconv.ParseInt(r.URL.Query().Get("before_seq"), 10, 64)
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 || limit > 100 {
 		limit = 20
@@ -26,6 +27,17 @@ func (s *Server) handleTaskConversation(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		http.Error(w, "task not found", http.StatusNotFound)
 		return
+	}
+	if sessionID, err := s.st.MainSessionForTask(r.Context(), id); err == nil && sessionID > 0 {
+		if has, _ := s.st.HasMessages(r.Context(), sessionID); has {
+			msgs, next, err := s.st.MessagesForSession(r.Context(), sessionID, beforeSeq, limit)
+			if err != nil {
+				httpError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"source": "db", "messages": msgs, "next": next})
+			return
+		}
 	}
 	path := detail.SourcePath
 	if path == "" && len(detail.Sessions) > 0 {

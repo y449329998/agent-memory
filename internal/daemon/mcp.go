@@ -227,6 +227,45 @@ func (s *Server) SyncTask(ctx context.Context, in mcp.SyncTaskInput) (any, error
 	return map[string]any{"task_id": id, "settled": settled, "session_path": path, "task": detail}, nil
 }
 
+// ConversationSearch 在完整对话里检索历史消息。
+func (s *Server) ConversationSearch(ctx context.Context, in mcp.ConversationSearchInput) (any, error) {
+	var projectID int64
+	if in.ProjectPath != "" {
+		id, ok, err := s.st.ResolveProjectByPath(ctx, in.ProjectPath)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			projectID = id
+		}
+	}
+	hits, err := s.st.SearchMessages(ctx, in.Query, projectID, in.TaskID, in.Limit)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"hits": hits, "count": len(hits)}, nil
+}
+
+// ConversationGet 按 seq 游标读某个任务的完整对话。
+func (s *Server) ConversationGet(ctx context.Context, in mcp.ConversationGetInput) (any, error) {
+	_, ok, err := s.st.TaskDetail(ctx, in.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, domain.ErrTaskCardNotFound
+	}
+	sid, err := s.st.MainSessionForTask(ctx, in.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	msgs, next, err := s.st.MessagesForSession(ctx, sid, in.BeforeSeq, in.Limit)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"task_id": in.TaskID, "session_id": sid, "messages": msgs, "next": next}, nil
+}
+
 // latestSessionPath 取该项目下最近更新的会话文件路径。
 func (s *Server) latestSessionPath(ctx context.Context, projectPath string) (string, error) {
 	pid, ok, err := s.st.ResolveProjectByPath(ctx, projectPath)

@@ -49,6 +49,12 @@ func (a *recordingAPI) UpdateTask(ctx context.Context, in UpdateTaskInput) (any,
 func (a *recordingAPI) SyncTask(ctx context.Context, in SyncTaskInput) (any, error) {
 	return map[string]any{"task_id": 7, "settled": false}, nil
 }
+func (a *recordingAPI) ConversationSearch(ctx context.Context, in ConversationSearchInput) (any, error) {
+	return map[string]any{"hits": []any{}, "count": 0}, nil
+}
+func (a *recordingAPI) ConversationGet(ctx context.Context, in ConversationGetInput) (any, error) {
+	return map[string]any{"messages": []any{}, "next": 0}, nil
+}
 func (a *recordingAPI) ExportTask(ctx context.Context, id int64) (any, error) {
 	return map[string]any{"markdown": "task_id: 7"}, nil
 }
@@ -152,8 +158,8 @@ func TestTaskGetForwardsID(t *testing.T) {
 func TestToolDescriptionsArePresentAndNonTrivial(t *testing.T) {
 	s := NewServer(&recordingAPI{})
 	tools := s.toolDefinitions()
-	if len(tools) != 12 {
-		t.Fatalf("want 12 tools, got %d", len(tools))
+	if len(tools) != 14 {
+		t.Fatalf("want 14 tools, got %d", len(tools))
 	}
 	seen := map[string]bool{}
 	for _, tool := range tools {

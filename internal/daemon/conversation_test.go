@@ -92,3 +92,28 @@ func TestTaskFilesEndpoint(t *testing.T) {
 		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestConversationFromDB(t *testing.T) {
+	s, st := newTestServer(t)
+	id := seedSessionTask(t, st)
+	ctx := context.Background()
+	sid, err := st.MainSessionForTask(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if err := st.ReplaceMessages(ctx, sid, []domain.SessionMessage{
+		{SessionID: sid, Seq: 1, Role: "user", Kind: "text", Text: "给扣减加乐观锁", Ts: now},
+		{SessionID: sid, Seq: 2, Role: "assistant", Kind: "text", Text: "好了", Ts: now.Add(time.Minute)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rec := webDo(t, s, http.MethodGet, "/v1/task/conversation?task_id="+itoa(id), webToken, nil, nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"source":"db"`) {
+		t.Fatalf("want db source: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = webDo(t, s, http.MethodGet, "/v1/task/conversation?task_id="+itoa(id)+"&before_seq=2", webToken, nil, nil)
+	if !strings.Contains(rec.Body.String(), "乐观锁") {
+		t.Fatalf("page should contain seq1: %s", rec.Body.String())
+	}
+}

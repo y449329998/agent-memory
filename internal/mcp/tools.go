@@ -77,6 +77,21 @@ type SyncTaskInput struct {
 	SessionID   string `json:"session_id"`
 }
 
+// ConversationSearchInput 在完整对话里检索历史消息。
+type ConversationSearchInput struct {
+	Query       string `json:"query"`
+	ProjectPath string `json:"project_path"`
+	TaskID      int64  `json:"task_id"`
+	Limit       int    `json:"limit"`
+}
+
+// ConversationGetInput 按顺序读完整对话。
+type ConversationGetInput struct {
+	TaskID    int64 `json:"task_id"`
+	BeforeSeq int64 `json:"before_seq"`
+	Limit     int   `json:"limit"`
+}
+
 // ToolAPI 是 MCP 层与共享记忆之间的全部接触面。
 // daemon.Server 直接实现它（spec §8.1 列的七个工具都从这里出入）。
 type ToolAPI interface {
@@ -89,6 +104,8 @@ type ToolAPI interface {
 	AddTask(ctx context.Context, in AddTaskInput) (any, error)
 	UpdateTask(ctx context.Context, in UpdateTaskInput) (any, error)
 	SyncTask(ctx context.Context, in SyncTaskInput) (any, error)
+	ConversationSearch(ctx context.Context, in ConversationSearchInput) (any, error)
+	ConversationGet(ctx context.Context, in ConversationGetInput) (any, error)
 	ExportTask(ctx context.Context, id int64) (any, error)
 	ResolveProject(ctx context.Context, path string) (any, error)
 	Stats(ctx context.Context) (any, error)
@@ -177,6 +194,19 @@ func (s *Server) toolDefinitions() []toolDef {
 				"project_path": map[string]any{"type": "string"},
 				"session_id":   map[string]any{"type": "string"},
 			}, "project_path")},
+		{"conversation_search", "在完整对话历史里检索（中文两字词可命中）。可按 project_path 或 task_id 收窄；返回角色、时间、会话与命中上下文。",
+			objectSchema(map[string]any{
+				"query":        map[string]any{"type": "string"},
+				"project_path": map[string]any{"type": "string"},
+				"task_id":      map[string]any{"type": "integer"},
+				"limit":        map[string]any{"type": "integer"},
+			}, "query")},
+		{"conversation_get", "按顺序读某个任务的完整对话；before_seq 往更早翻，next=0 表示到头。",
+			objectSchema(map[string]any{
+				"task_id":    map[string]any{"type": "integer"},
+				"before_seq": map[string]any{"type": "integer"},
+				"limit":      map[string]any{"type": "integer"},
+			}, "task_id")},
 		{"task_export", "导出交接 Prompt，带同一个 task_id。",
 			objectSchema(map[string]any{"id": map[string]any{"type": "integer"}}, "id")},
 		{"project_resolve", "把任意目录路径解析成共享库里的 project_key，用来确认两个 agent 看的是同一个项目。",
@@ -264,6 +294,24 @@ func (s *Server) callTool(ctx context.Context, raw json.RawMessage) (any, error)
 				return nil, fmt.Errorf("project_path is required")
 			}
 			return s.api.SyncTask(ctx, in)
+		case "conversation_search":
+			var in ConversationSearchInput
+			if err := bind(p.Arguments, &in); err != nil {
+				return nil, err
+			}
+			if strings.TrimSpace(in.Query) == "" {
+				return nil, fmt.Errorf("query is required")
+			}
+			return s.api.ConversationSearch(ctx, in)
+		case "conversation_get":
+			var in ConversationGetInput
+			if err := bind(p.Arguments, &in); err != nil {
+				return nil, err
+			}
+			if in.TaskID <= 0 {
+				return nil, fmt.Errorf("task_id must be a positive integer")
+			}
+			return s.api.ConversationGet(ctx, in)
 		case "task_export":
 			var in struct {
 				ID int64 `json:"id"`
