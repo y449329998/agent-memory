@@ -74,6 +74,13 @@ func (r *Runner) syncTaskFromSession(ctx context.Context, agentName string, sess
 	if err := r.store.RefreshTaskSnippets(ctx, task.ID, at); err != nil {
 		return err
 	}
+	keys := make([]string, 0, len(derived))
+	for _, st := range derived {
+		keys = append(keys, st.SourceKey)
+	}
+	if err := r.store.PruneStaleOverrides(ctx, task.ID, keys); err != nil {
+		return err
+	}
 	r.queueTaskSummary(ctx, task.ID, at)
 	return nil
 }
