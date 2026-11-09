@@ -224,7 +224,11 @@ func (s *Server) handleExportTask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "project not found", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"markdown": compose.RenderTaskExport(detail.Task, detail.Snippets, project)})
+	md := compose.RenderTaskExport(detail.Task, detail.Snippets, project)
+	if r.URL.Query().Get("mode") == "brief" {
+		md = compose.RenderTaskHandoffBrief(detail.Task, project)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"markdown": md})
 }
 
 func (s *Server) refreshTaskHandoff(ctx context.Context, projectID int64) {
