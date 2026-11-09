@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -365,8 +366,8 @@ func (s *Store) UpdateTask(ctx context.Context, in TaskUpdate, at time.Time) (do
 		}
 	}
 	if in.NextSteps != nil {
-		if _, err := tx.ExecContext(ctx, `UPDATE task SET next_steps = ?, manual_edited_at = ?, updated_at = ? WHERE id = ?`,
-			*in.NextSteps, now, now, in.ID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE task SET next_steps = ?, updated_at = ? WHERE id = ?`,
+			*in.NextSteps, now, in.ID); err != nil {
 			return domain.Task{}, err
 		}
 	}
@@ -375,8 +376,8 @@ func (s *Store) UpdateTask(ctx context.Context, in TaskUpdate, at time.Time) (do
 		if *in.OwnerAgent == "" {
 			claimed = 0
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE task SET owner_agent = ?, claimed_at = ?, manual_edited_at = ?, updated_at = ? WHERE id = ?`,
-			*in.OwnerAgent, claimed, now, now, in.ID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE task SET owner_agent = ?, claimed_at = ?, updated_at = ? WHERE id = ?`,
+			*in.OwnerAgent, claimed, now, in.ID); err != nil {
 			return domain.Task{}, err
 		}
 	}
@@ -385,20 +386,20 @@ func (s *Store) UpdateTask(ctx context.Context, in TaskUpdate, at time.Time) (do
 		if *in.Status == domain.StatusDone {
 			completed = now
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE task SET status = ?, completed_at = ?, archived_at = 0, manual_edited_at = ?, updated_at = ? WHERE id = ?`,
-			*in.Status, completed, now, now, in.ID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE task SET status = ?, completed_at = ?, archived_at = 0, updated_at = ? WHERE id = ?`,
+			*in.Status, completed, now, in.ID); err != nil {
 			return domain.Task{}, err
 		}
 	}
 	if in.Archived != nil {
 		if *in.Archived {
-			if _, err := tx.ExecContext(ctx, `UPDATE task SET archived_at = ?, manual_edited_at = ?, updated_at = ? WHERE id = ?`,
-				now, now, now, in.ID); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE task SET archived_at = ?, updated_at = ? WHERE id = ?`,
+				now, now, in.ID); err != nil {
 				return domain.Task{}, err
 			}
 		} else {
-			if _, err := tx.ExecContext(ctx, `UPDATE task SET archived_at = 0, completed_at = CASE WHEN status = 'done' THEN ? ELSE 0 END, manual_edited_at = ?, updated_at = ? WHERE id = ?`,
-				now, now, now, in.ID); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE task SET archived_at = 0, completed_at = CASE WHEN status = 'done' THEN ? ELSE 0 END, updated_at = ? WHERE id = ?`,
+				now, now, in.ID); err != nil {
 				return domain.Task{}, err
 			}
 		}
@@ -411,9 +412,18 @@ func (s *Store) UpdateTask(ctx context.Context, in TaskUpdate, at time.Time) (do
 			return domain.Task{}, err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE task SET manual_edited_at = ?, updated_at = ? WHERE id = ?`,
-		now, now, in.ID); err != nil {
-		return domain.Task{}, err
+	// 分层 freeze：只有改目标或步骤文本才算「人工接管」，冻结扫描同步；
+	// 状态/owner/下一步/归档不冻结，扫描继续刷新源文本。
+	if in.Goal != nil || in.Steps != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE task SET manual_edited_at = ?, updated_at = ? WHERE id = ?`,
+			now, now, in.ID); err != nil {
+			return domain.Task{}, err
+		}
+	} else {
+		if _, err := tx.ExecContext(ctx, `UPDATE task SET updated_at = ? WHERE id = ?`,
+			now, in.ID); err != nil {
+			return domain.Task{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return domain.Task{}, err
@@ -714,4 +724,73 @@ SELECT ?, session_id, 'continuation', ? FROM task_session WHERE task_id = ?`, ta
 		return err
 	}
 	return s.RefreshTaskSnippets(ctx, targetID, at)
+}
+
+// TaskFileStat 是任务文件区的一行：路径 + 改动次数 + 最近改动时间 + 来源 agent。
+type TaskFileStat struct {
+	Path   string    `json:"path"`
+	Count  int       `json:"count"`
+	LastTs time.Time `json:"last_ts"`
+	Agent  string    `json:"agent"`
+}
+
+// TaskFiles 从关联会话的 tool_edit 事件按文件聚合；无关联会话时退回 task.Files。
+func (s *Store) TaskFiles(ctx context.Context, taskID int64) ([]TaskFileStat, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT e.files_json, e.ts, se.agent
+FROM session_event e
+JOIN task_session ts ON ts.session_id = e.session_id
+JOIN session se ON se.id = e.session_id
+WHERE ts.task_id = ? AND e.kind = 'tool_edit'
+ORDER BY e.ts`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	agg := map[string]*TaskFileStat{}
+	var order []string
+	for rows.Next() {
+		var filesJSON string
+		var ts int64
+		var agent string
+		if err := rows.Scan(&filesJSON, &ts, &agent); err != nil {
+			return nil, err
+		}
+		var list []string
+		if json.Unmarshal([]byte(filesJSON), &list) != nil {
+			continue
+		}
+		for _, p := range list {
+			st, ok := agg[p]
+			if !ok {
+				st = &TaskFileStat{Path: p, Agent: agent}
+				agg[p] = st
+				order = append(order, p)
+			}
+			st.Count++
+			if t := timeFromUnix(ts); t.After(st.LastTs) {
+				st.LastTs = t
+				st.Agent = agent
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(order) == 0 {
+		task, ok, err := s.TaskByID(ctx, taskID)
+		if err != nil || !ok {
+			return nil, err
+		}
+		for _, p := range task.Files {
+			order = append(order, p)
+			agg[p] = &TaskFileStat{Path: p, Count: 1, Agent: task.SourceAgent}
+		}
+	}
+	out := make([]TaskFileStat, 0, len(order))
+	for _, p := range order {
+		out = append(out, *agg[p])
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].LastTs.After(out[j].LastTs) })
+	return out, nil
 }
