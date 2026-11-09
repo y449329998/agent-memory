@@ -60,3 +60,46 @@ func RenderTaskExport(task domain.Task, snippets []domain.TaskSnippet, project d
 	b.WriteString("3. 完成后把状态改为 done，并在下一步里写清验证结果。\n")
 	return b.String()
 }
+
+// RenderTaskHandoffBrief 极简接手版：五块、<=30 行，凸出重点不啰嗦。
+func RenderTaskHandoffBrief(task domain.Task, project domain.Project) string {
+	var b strings.Builder
+	b.WriteString("# 接手任务\n\n")
+	fmt.Fprintf(&b, "- 目标: %s\n", oneLine(task.Goal))
+	fmt.Fprintf(&b, "- 项目: %s (`%s`) · task_id %d · 状态 %s\n", project.DisplayName, project.Key, task.ID, task.Status)
+	if task.NextSteps != "" {
+		fmt.Fprintf(&b, "- 现在到哪/卡在哪: %s\n", clipPlain(task.NextSteps, 120))
+	}
+	b.WriteString("\n## 未完成步骤\n\n")
+	n := 0
+	for _, st := range task.Steps {
+		if st.Status == domain.StepDone || st.Status == domain.StepSkipped {
+			continue
+		}
+		mark := "[ ]"
+		if st.Status == domain.StepBlocked {
+			mark = "[!]"
+		} else if st.Status == domain.StepDoing {
+			mark = "[~]"
+		}
+		fmt.Fprintf(&b, "- %s %s\n", mark, oneLine(st.Subject))
+		n++
+		if n >= 10 {
+			break
+		}
+	}
+	if n == 0 {
+		b.WriteString("- （无未完成步骤）\n")
+	}
+	if len(task.Files) > 0 {
+		b.WriteString("\n## 关键文件\n\n")
+		for _, f := range head(task.Files, 8) {
+			fmt.Fprintf(&b, "- %s\n", f)
+		}
+	}
+	b.WriteString("\n## 交接要求\n\n")
+	b.WriteString("1. 先 `task_get` 读最新任务。\n")
+	b.WriteString("2. 用 `task_update` 更新同一个 task_id，不要新建。\n")
+	b.WriteString("3. 完成后改 done 并在下一步写清验证结果。\n")
+	return b.String()
+}

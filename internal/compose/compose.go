@@ -160,7 +160,7 @@ func (c *Composer) Render(ctx context.Context, projectID int64) (Result, error) 
 			truncated: true,
 		})
 	} else {
-		// 没有正式任务时保留旧任务卡，兼容尚未回填/尚未同步的库。
+		// 没有合并任务时保留旧任务卡，兼容尚未回填/尚未同步的库。
 		full := renderCards(cards, cardSessions, cardDetailFull)
 		lean := renderCards(cards, cardSessions, cardDetailLean)
 		attempts = []attempt{

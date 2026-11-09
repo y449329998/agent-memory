@@ -3,29 +3,34 @@ package compose
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/muyi99/agent-memory/internal/domain"
 )
 
-func TestRenderTaskExport(t *testing.T) {
+func TestHandoffBriefIsShort(t *testing.T) {
 	task := domain.Task{
-		ID: 42, Goal: "实现导出", Status: domain.StatusDoing, OwnerAgent: "qoder",
-		NextSteps: "补测试", Files: []string{"app/Export.php"},
+		ID: 7, Goal: "给扣减加乐观锁", Status: domain.StatusBlocked,
+		NextSteps: "先复现超卖", Files: []string{"a.go", "b.go", "c.go", "d.go", "e.go", "f.go", "g.go", "h.go", "i.go"},
 		Steps: []domain.TaskStep{
 			{Subject: "写接口", Status: domain.StepDone},
-			{Subject: "补测试", Status: domain.StepDoing},
+			{Subject: "补测试", Status: domain.StepBlocked},
 		},
 	}
-	snippets := []domain.TaskSnippet{{Role: "assistant", Kind: "assistant_text", Text: "测试通过", Ts: time.Now()}}
-	project := domain.Project{Key: "e:/demo", DisplayName: "demo"}
-	got := RenderTaskExport(task, snippets, project)
-	for _, want := range []string{
-		"task_id: 42", "实现导出", "[x] 写接口", "[~] 补测试",
-		"补测试", "app/Export.php", "task_get", "task_update", "不要新建任务",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("export missing %q:\n%s", want, got)
+	project := domain.Project{DisplayName: "demo", Key: "f:/demo"}
+	md := RenderTaskHandoffBrief(task, project)
+	lines := strings.Split(strings.TrimSpace(md), "\n")
+	if len(lines) > 30 {
+		t.Fatalf("brief must be <=30 lines, got %d:\n%s", len(lines), md)
+	}
+	for _, want := range []string{"给扣减加乐观锁", "补测试", "task_get", "task_update"} {
+		if !strings.Contains(md, want) {
+			t.Fatalf("brief missing %q", want)
 		}
+	}
+	if strings.Contains(md, "i.go") {
+		t.Fatal("brief should cap files at 8")
+	}
+	if strings.Contains(md, "写接口") {
+		t.Fatal("brief should only list unfinished steps")
 	}
 }
