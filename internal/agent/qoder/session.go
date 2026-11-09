@@ -382,8 +382,30 @@ func (a *Adapter) ScanSessionUnits(ctx context.Context) ([]agent.SessionUnit, er
 			}
 			u.Session = sess
 			u.Events = events
+			u.Steps = parseTodos(content)
 			out = append(out, u)
 		}
 	}
 	return out, nil
+}
+
+// ParseSessionFile 解析单个会话文件，供定向同步（task_sync）复用，不走目录扫描。
+func (a *Adapter) ParseSessionFile(path string) (agent.SessionUnit, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return agent.SessionUnit{}, err
+	}
+	u := agent.SessionUnit{Path: path, Content: content, Size: int64(len(content))}
+	if st, err := os.Stat(path); err == nil {
+		u.MTime = st.ModTime()
+	}
+	sess, events, err := parseSessionJSONL(path, content)
+	if err != nil {
+		return u, err
+	}
+	sess.Agent = a.Name()
+	u.Session = sess
+	u.Events = events
+	u.Steps = parseTodos(content)
+	return u, nil
 }
