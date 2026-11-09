@@ -103,11 +103,16 @@ func (c *Composer) Render(ctx context.Context, projectID int64) (Result, error) 
 	}
 
 	userItems, err := c.st.RecentMemoriesByType(ctx, 0, domain.ScopeUser, []domain.MemoryType{
-		domain.TypePreference, domain.TypeConvention, domain.TypeConstraint, domain.TypeLesson, domain.TypeFact,
-	}, 40)
+		domain.TypeConstraint, domain.TypePreference, domain.TypeConvention, domain.TypeLesson,
+	}, 12)
 	if err != nil {
 		return Result{}, err
 	}
+	// 用户级记忆是跨项目的：简报里只放「怎么和这位用户协作」的摘要，
+	// 事实类（目录、设备、库结构）留给 memory_search，避免每份简报都被撑爆。
+	userItems = preferByType(userItems, []domain.MemoryType{
+		domain.TypeConstraint, domain.TypePreference, domain.TypeConvention, domain.TypeLesson,
+	})
 	projectItems, err := c.st.RecentMemoriesByType(ctx, projectID, domain.ScopeProject, []domain.MemoryType{
 		domain.TypeConstraint, domain.TypeConvention, domain.TypeLesson,
 	}, 40)
@@ -124,7 +129,7 @@ func (c *Composer) Render(ctx context.Context, projectID int64) (Result, error) 
 		taskCount = len(tasks)
 	}
 	overview := renderOverview(project, len(userItems), len(projectItems), taskCount)
-	prefs := renderList("## 用户偏好", userItems)
+	prefs := renderDigest("## 用户偏好", userItems, 8, 120)
 	constraints := renderList("## 项目硬约束与约定", projectItems)
 	entry := renderEntry(project.Key)
 
@@ -271,6 +276,51 @@ func renderListCompact(title string, items []domain.MemoryItem) string {
 	return b.String()
 }
 
+// preferByType 按给定类型顺序稳定排序：约束 > 偏好 > 约定 > 教训，
+// 同类型内保持最近优先。简报的条目上限优先留给最重要的规则。
+func preferByType(items []domain.MemoryItem, order []domain.MemoryType) []domain.MemoryItem {
+	rank := map[domain.MemoryType]int{}
+	for i, t := range order {
+		rank[t] = i
+	}
+	out := append([]domain.MemoryItem(nil), items...)
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0; j-- {
+			if rank[out[j].Type] >= rank[out[j-1].Type] {
+				break
+			}
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	return out
+}
+
+// renderDigest 只放一条摘要：每条压成一行并截断，最多 maxItems 条；
+// 被省下的条目用一行提示指向 memory_search。
+func renderDigest(title string, items []domain.MemoryItem, maxItems, maxRunes int) string {
+	if len(items) == 0 {
+		return section(title, "")
+	}
+	var b strings.Builder
+	b.WriteString(title)
+	b.WriteString("\n\n")
+	n := len(items)
+	if maxItems > 0 && n > maxItems {
+		n = maxItems
+	}
+	for _, m := range items[:n] {
+		text := oneLine(m.Text)
+		if r := []rune(text); maxRunes > 0 && len(r) > maxRunes {
+			text = string(r[:maxRunes]) + "…"
+		}
+		fmt.Fprintf(&b, "- %s\n", text)
+	}
+	if len(items) > n {
+		fmt.Fprintf(&b, "- （另有 %d 条用户级记忆，用 `memory_search` 检索）\n", len(items)-n)
+	}
+	return b.String()
+}
+
 func renderOverviewCompact(p domain.Project) string {
 	return fmt.Sprintf("## 项目概况\n\n- project_key: `%s`\n", p.Key)
 }
@@ -325,25 +375,33 @@ func renderTasks(tasks []domain.Task, level detailLevel) string {
 				current = step.Subject
 			}
 		}
-		fmt.Fprintf(&b, "### %d. %s\n", i+1, oneLine(task.Goal))
+		fmt.Fprintf(&b, "### %d. %s\n", i+1, clipPlain(task.Goal, 100))
 		fmt.Fprintf(&b, "- 状态: %s ｜ owner: %s ｜ 步骤: %d/%d", task.Status, task.OwnerAgent, done, len(task.Steps))
 		if current != "" {
-			fmt.Fprintf(&b, " ｜ 当前: %s", oneLine(current))
+			fmt.Fprintf(&b, " ｜ 当前: %s", clipPlain(current, 60))
 		}
 		b.WriteString("\n")
 		if summary := readyTaskSummary(task); summary != "" {
 			fmt.Fprintf(&b, "- 摘要: %s\n", clipPlain(summary, 400))
 		} else if task.NextSteps != "" {
-			fmt.Fprintf(&b, "- 下一步: %s\n", oneLine(task.NextSteps))
+			fmt.Fprintf(&b, "- 下一步: %s\n", clipPlain(task.NextSteps, 200))
 		}
 		if level == cardDetailFull && len(task.Files) > 0 {
-			fmt.Fprintf(&b, "- 改动文件: %s\n", strings.Join(head(task.Files, 8), ", "))
+			files := head(task.Files, 6)
+			for j, f := range files {
+				files[j] = clipPlain(f, 80)
+			}
+			fmt.Fprintf(&b, "- 改动文件: %s\n", strings.Join(files, ", "))
 		}
 		if len(task.Commands) > 0 {
-			fmt.Fprintf(&b, "- 执行命令: %s\n", strings.Join(head(task.Commands, 4), " && "))
+			cmds := head(task.Commands, 3)
+			for j, c := range cmds {
+				cmds[j] = clipPlain(c, 100)
+			}
+			fmt.Fprintf(&b, "- 执行命令: %s\n", strings.Join(cmds, " && "))
 		}
 		if len(task.Errors) > 0 {
-			fmt.Fprintf(&b, "- 未解决报错: %s\n", oneLine(task.Errors[0]))
+			fmt.Fprintf(&b, "- 未解决报错: %s\n", clipPlain(task.Errors[0], 160))
 		}
 		b.WriteString("\n")
 	}
@@ -357,7 +415,7 @@ func renderTasksCompact(tasks []domain.Task) string {
 	var b strings.Builder
 	b.WriteString("## 进行中的任务\n\n")
 	for _, task := range tasks {
-		fmt.Fprintf(&b, "- [%s] %s", task.Status, oneLine(task.Goal))
+		fmt.Fprintf(&b, "- [%s] %s", task.Status, clipPlain(task.Goal, 100))
 		if summary := readyTaskSummary(task); summary != "" {
 			fmt.Fprintf(&b, " — %s", clipPlain(summary, 160))
 		} else if task.NextSteps != "" {
@@ -395,8 +453,14 @@ func renderTaskQuestions(tasks []domain.Task) string {
 		}
 		for _, q := range strings.Split(task.OpenQuestions, " / ") {
 			if q = strings.TrimSpace(q); q != "" {
-				qs = append(qs, fmt.Sprintf("- [%s] %s", task.Status, oneLine(q)))
+				qs = append(qs, fmt.Sprintf("- [%s] %s", task.Status, clipPlain(q, 160)))
 			}
+			if len(qs) >= 5 {
+				break
+			}
+		}
+		if len(qs) >= 5 {
+			break
 		}
 	}
 	return section("## 未决问题", strings.Join(qs, "\n"))
