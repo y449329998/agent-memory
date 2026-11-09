@@ -46,6 +46,23 @@ type TaskStepDraft struct {
 	Status      string
 }
 
+// TranscriptMessage 是一整场会话里的一条完整对话消息。
+type TranscriptMessage struct {
+	Seq       int
+	Role      string
+	Kind      string // text / tool / tool_error
+	Text      string
+	Tool      string
+	Files     []string
+	Ts        time.Time
+	Truncated bool
+}
+
+// TranscriptParser 是适配器的可选能力：整场会话 → 完整消息（不限 500 字）。
+type TranscriptParser interface {
+	ParseTranscript(path string) ([]TranscriptMessage, error)
+}
+
 // SessionEvent 是适配器产出的会话事件，与 domain.SessionEvent 同构但不带 SessionID：
 // 库里的行主键由 store 决定，适配器不该关心。
 type SessionEvent struct {
