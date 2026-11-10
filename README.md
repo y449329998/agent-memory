@@ -95,6 +95,16 @@ MCP 暴露 14 个工具：`memory_search` / `memory_add` / `memory_list` / `hand
 
 **`link` 会改 agent 的配置，务必先 `--dry-run`。** 写前自动备份为 `<文件>.bak-<时间戳>`，项目内只改它自己装过的那段带 marker 的区块，`unlink` 可撤销。改了服务端口需要重新 `link`；MCP 客户端通常要重启才加载新配置。
 
+### 配套技能（让 agent 知道何时用哪个工具）
+
+`skills/agent-memory/SKILL.md` 是一份 Agent Skill：14 个工具各自「什么时候用 / 不要用在」、接手/干活/交接/找历史对话的调用顺序，以及 `step_status` 冻结语义、`SourceKey` 等硬规则。
+
+```bash
+cp -r skills/agent-memory ~/.qoder-cn/skills/    # 装到 Qoder 用户级技能目录
+```
+
+之后用 `/agent-memory` 手动调用，或按技能描述在相关对话里自动触发。
+
 ## 平台差异
 
 Windows 是主力平台，桌面应用带原生窗口、托盘与自启。macOS / Linux 上同一份代码能编译运行，但界面交给浏览器：
