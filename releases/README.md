@@ -2,7 +2,7 @@
 
 | 文件 | 说明 |
 | --- | --- |
-| `agent-memory-setup-x64-0.1.0.exe` | Windows x64 安装包（NSIS 3，per-user，约 7.7 MB） |
+| `agent-memory-setup-x64-0.2.0.exe` | Windows x64 安装包（NSIS 3，per-user，约 7.9 MB） |
 | `SHA256.txt` | 上面安装包的 SHA-256，格式为 `<哈希>  <文件名>` |
 
 ## 校验
@@ -10,7 +10,7 @@
 PowerShell：
 
 ```powershell
-Get-FileHash .\agent-memory-setup-x64-0.1.0.exe -Algorithm SHA256
+Get-FileHash .\agent-memory-setup-x64-0.2.0.exe -Algorithm SHA256
 ```
 
 Git Bash / Linux / macOS：

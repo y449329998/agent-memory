@@ -30,7 +30,7 @@ go build -ldflags "-H windowsgui" -o agent-memory-app.exe ./cmd/agent-memory-app
 ./agent-memory.exe init
 ```
 
-不用命令行的直接看第 10.5 节：双击 `agent-memory-app.exe` 即可，或用 [releases/agent-memory-setup-x64-0.1.0.exe](../releases/README.md) 安装。
+不用命令行的直接看第 10.5 节：双击 `agent-memory-app.exe` 即可，或用 [releases/agent-memory-setup-x64-0.2.0.exe](../releases/README.md) 安装。
 
 ### macOS / Linux
 

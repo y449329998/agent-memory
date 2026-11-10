@@ -100,4 +100,4 @@ func (s *Server) replyError(id json.RawMessage, code int, message string) []byte
 	return body
 }
 
-const ServerVersion = "0.1.0"
+const ServerVersion = "0.2.0"

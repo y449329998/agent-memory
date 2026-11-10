@@ -684,4 +684,4 @@ powershell -ExecutionPolicy Bypass -File scripts\package.ps1
 
 ---
 
-*文档对应版本：`agent-memory 0.1.0`（分支 `feat/project-console`）。界面若与此处不一致，以程序内分区说明为准。*
+*文档对应版本：`agent-memory 0.2.0`（分支 `feat/project-console`）。界面若与此处不一致，以程序内分区说明为准。*

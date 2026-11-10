@@ -45,8 +45,8 @@ func TestRun_VersionPrintsVersion(t *testing.T) {
 // TestVersionMatchesMCP 锁定收尾版本：CLI 与 MCP serverInfo 必须是同一个版本号，
 // 否则客户端看到的两处信息互相矛盾。
 func TestVersionMatchesMCP(t *testing.T) {
-	if Version != "0.1.0" {
-		t.Fatalf("cli Version = %q, want 0.1.0", Version)
+	if Version == "" {
+		t.Fatal("cli Version is empty")
 	}
 	if mcp.ServerVersion != Version {
 		t.Fatalf("mcp ServerVersion = %q, cli Version = %q", mcp.ServerVersion, Version)

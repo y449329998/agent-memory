@@ -10,7 +10,7 @@
 
 ### Windows：装桌面应用
 
-1. 下载 [releases/agent-memory-setup-x64-0.1.0.exe](releases/agent-memory-setup-x64-0.1.0.exe)（校验和见 [releases/SHA256.txt](releases/SHA256.txt)）。免管理员权限，装进 `%LOCALAPPDATA%\Programs\agent-memory`。
+1. 下载 [releases/agent-memory-setup-x64-0.2.0.exe](releases/agent-memory-setup-x64-0.2.0.exe)（校验和见 [releases/SHA256.txt](releases/SHA256.txt)）。免管理员权限，装进 `%LOCALAPPDATA%\Programs\agent-memory`。
 2. 双击桌面图标或开始菜单里的「agent-memory 共享记忆」。它自动建配置和库、拉起后台服务（默认端口 47123）、打开主窗口。
 3. 窗口里点**立即同步**，记忆与会话就进了共享库；总览、项目、记忆、来源、任务、设置各页点着看就行。关窗只是隐藏到托盘，服务继续跑。
 4. 想让 agent 直接读写这份记忆：接驳台页复制配置，或在项目里跑 `agent-memory link qoder --project . --dry-run`（去掉 `--dry-run` 才真写）。
@@ -182,4 +182,4 @@ powershell -ExecutionPolicy Bypass -File scripts\package.ps1     # 产出 out\ag
 
 - Gitee：<https://gitee.com/muyi99/agent-memory>
 - GitHub：<https://github.com/y449329998/agent-memory>
-- v0.1.0，MIT，见 [LICENSE](LICENSE)
+- v0.2.0，MIT，见 [LICENSE](LICENSE)

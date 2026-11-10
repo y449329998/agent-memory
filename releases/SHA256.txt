@@ -1,1 +1,1 @@
-7bd842b14a5605a6897502edbf145f881122df6a68f80d12ffc26b19890f06d0  agent-memory-setup-x64-0.1.0.exe
+0bdb68c946545397390b5ecd3fdf5075eabd38e4e5a64c3dce5d16e07727b330  agent-memory-setup-x64-0.2.0.exe
